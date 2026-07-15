@@ -90,7 +90,7 @@ let db;
 let experiments = [];
 let activeExperiment = null;
 let saveTimer = null;
-let currentFilters = { search: "" };
+let currentFilters = { search: "", showDeleted: false };
 let taxonomy = loadTaxonomy();
 let driveSettings = loadDriveSettings();
 let driveState = {
@@ -517,12 +517,8 @@ function putExperiment(experiment) {
   });
 }
 
-function deleteExperiment(id) {
-  return new Promise((resolve, reject) => {
-    const request = tx("readwrite").delete(id);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+function isDeletedRecord(record) {
+  return Boolean(record && record.deletedAt);
 }
 
 function replaceAllExperiments(records) {
@@ -543,11 +539,26 @@ async function saveExperimentRecord(experiment) {
   }
 }
 
-async function removeExperimentRecord(id) {
-  await deleteExperiment(id);
-  if (driveState.connected) {
-    await driveDeleteRecord(id);
-  }
+async function markExperimentDeleted(experiment) {
+  const timestamp = now();
+  const deletedRecord = {
+    ...experiment,
+    deletedAt: experiment.deletedAt || timestamp,
+    updatedAt: timestamp,
+  };
+  await saveExperimentRecord(deletedRecord);
+  return deletedRecord;
+}
+
+async function restoreExperimentRecord(experiment) {
+  const restoredRecord = {
+    ...experiment,
+    deletedAt: "",
+    updatedAt: now(),
+  };
+  delete restoredRecord.deletedAt;
+  await saveExperimentRecord(restoredRecord);
+  return restoredRecord;
 }
 
 function createExperiment(section, seed = {}) {
@@ -661,6 +672,7 @@ function sectionRecords(section) {
   const query = currentFilters.search.toLowerCase();
   return experiments.filter((experiment) => {
     if (experiment.sectionId !== section.id) return false;
+    if (!currentFilters.showDeleted && isDeletedRecord(experiment)) return false;
     if (!query) return true;
     const haystack = [
       experiment.title,
@@ -747,6 +759,12 @@ function renderListPage() {
         <input class="field" type="search" placeholder="Search all sections" value="${escapeHtml(
           currentFilters.search,
         )}" data-filter="search" />
+        <label class="filter-toggle">
+          <input type="checkbox" data-filter="show-deleted" ${
+            currentFilters.showDeleted ? "checked" : ""
+          } />
+          <span>Show deleted records</span>
+        </label>
       </section>
 
       <div class="sections-stack">
@@ -778,6 +796,10 @@ function renderListPage() {
     const search = app.querySelector("[data-filter='search']");
     search.focus();
     search.setSelectionRange(search.value.length, search.value.length);
+  });
+  app.querySelector("[data-filter='show-deleted']").addEventListener("change", (event) => {
+    currentFilters.showDeleted = event.target.checked;
+    renderListPage();
   });
 }
 
@@ -842,12 +864,16 @@ function renderColumnHeader(section, column) {
 }
 
 function renderRecordRow(section, experiment) {
+  const deleted = isDeletedRecord(experiment);
   return `
-    <tr class="experiment-row">
+    <tr class="experiment-row ${deleted ? "deleted-record" : ""}">
       <td>
         <a class="row-link" href="#/record/${experiment.id}">${escapeHtml(experiment.title)}</a>
+        ${deleted ? `<span class="deleted-badge">Deleted</span>` : ""}
         <span class="row-note">${escapeHtml(
-          experiment.summary || stripHtml(experiment.content) || "No notes yet",
+          deleted
+            ? `Deleted ${formatDateTime(experiment.deletedAt)}`
+            : experiment.summary || stripHtml(experiment.content) || "No notes yet",
         )}</span>
       </td>
       ${section.columns.map((column) => `<td>${renderColumnValue(column, experiment)}</td>`).join("")}
@@ -921,6 +947,7 @@ async function renderDetailPage(id) {
   }
 
   const section = sectionById(activeExperiment.sectionId);
+  const deleted = isDeletedRecord(activeExperiment);
   renderShell(`
     <main class="page">
       <section class="page-header">
@@ -936,6 +963,18 @@ async function renderDetailPage(id) {
           <a class="btn ghost" href="#/" title="Back to sections">Back</a>
         </div>
       </section>
+
+      ${
+        deleted
+          ? `<section class="deleted-notice">
+              <div>
+                <strong>Deleted record</strong>
+                <span>This record is hidden from normal tables but still exists in storage. Restore it to make it active again.</span>
+              </div>
+              <button class="btn primary" type="button" data-action="restore-current">Restore</button>
+            </section>`
+          : ""
+      }
 
       <section class="detail-layout">
         <div class="panel editor-shell">
@@ -962,7 +1001,11 @@ async function renderDetailPage(id) {
 
           <div class="meta-section">
             <p class="meta-title">${escapeHtml(term("actions"))}</p>
-            <button class="btn danger" type="button" data-action="delete-current">Delete</button>
+            ${
+              deleted
+                ? `<button class="btn primary" type="button" data-action="restore-current">Restore</button>`
+                : `<button class="btn danger" type="button" data-action="delete-current">Delete</button>`
+            }
           </div>
         </aside>
       </section>
@@ -1134,6 +1177,9 @@ function buildReportRows(section, experiment) {
     label: column.label,
     value: reportFieldValue(column, experiment),
   }));
+  if (isDeletedRecord(experiment)) {
+    rows.push({ label: "Deleted", value: formatDateTime(experiment.deletedAt) });
+  }
   rows.push(
     { label: term("updated"), value: formatDateTime(experiment.updatedAt) },
     { label: "Created", value: formatDateTime(experiment.createdAt) },
@@ -1426,10 +1472,20 @@ function bindDetailPage(section) {
     exportActiveExperiment(section);
   });
 
-  app.querySelector("[data-action='delete-current']").addEventListener("click", async () => {
-    const confirmed = window.confirm(`Delete "${activeExperiment.title}"?`);
+  app.querySelectorAll("[data-action='restore-current']").forEach((button) => {
+    button.addEventListener("click", async () => {
+      activeExperiment = await restoreExperimentRecord(activeExperiment);
+      await loadExperiments();
+      await route();
+    });
+  });
+
+  app.querySelector("[data-action='delete-current']")?.addEventListener("click", async () => {
+    const confirmed = window.confirm(
+      `Delete "${activeExperiment.title}"? It will be hidden in the app but kept in storage for recovery.`,
+    );
     if (!confirmed) return;
-    await removeExperimentRecord(activeExperiment.id);
+    activeExperiment = await markExperimentDeleted(activeExperiment);
     await loadExperiments();
     location.hash = "#/";
   });
@@ -1895,7 +1951,7 @@ function normalizeBackupRecords(records) {
             )
           : {};
 
-      return {
+      const normalized = {
         id: String(record.id || uid()),
         sectionId: sectionIds.has(record.sectionId) ? record.sectionId : fallbackSectionId,
         title: String(record.title || "Untitled record"),
@@ -1909,6 +1965,8 @@ function normalizeBackupRecords(records) {
         createdAt: String(record.createdAt || timestamp),
         updatedAt: String(record.updatedAt || timestamp),
       };
+      if (record.deletedAt) normalized.deletedAt = String(record.deletedAt);
+      return normalized;
     });
 }
 
@@ -2094,14 +2152,9 @@ async function driveSaveRecord(experiment) {
 }
 
 async function driveDeleteRecord(id) {
-  const fileId =
-    driveState.recordFileIds[id] || (await driveFindChild(driveState.recordsFolderId, `${id}.json`))?.id;
-  if (!fileId) return;
-  await driveRequest(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
-    method: "DELETE",
-  });
-  delete driveState.recordFileIds[id];
-  delete driveState.recordModifiedTimes[id];
+  throw new Error(
+    `Hard deletion is disabled for Drive records (${id}). Mark the record deleted instead.`,
+  );
 }
 
 async function driveEnsureRecordAssetFolder(recordId) {

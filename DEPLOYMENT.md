@@ -92,6 +92,7 @@ For a practical rollout sequence, follow `SETUP_CHECKLIST.md`.
 - GitHub Pages can be public because it serves only the app shell. Records, note contents, images, and videos remain in the shared Drive folder.
 - The public `config.js` contains identifiers, not secrets. Keep the Drive folder itself restricted to the team.
 - Each record is saved as a separate JSON file to reduce accidental overwrites.
+- Record deletion is soft: deleted records are hidden in the app but kept in Drive with a `deletedAt` timestamp. Use `Show deleted records` and `Restore` in the app to recover them.
 - Use `Sync now` to pull the latest records from Drive while the app is open.
 - If two people edit the same record at the same time, the app checks Drive's modified timestamp before saving and asks before overwriting a newer Drive version.
 - Images and videos are uploaded to an `assets/` folder in Drive when Drive mode is connected. Local-only mode still embeds media in browser storage.

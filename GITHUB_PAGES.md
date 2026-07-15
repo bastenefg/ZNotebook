@@ -4,6 +4,8 @@ This app is safe to host as a public static site because the site only serves th
 
 Public files include `config.js`, which contains the Google OAuth Client ID and Drive folder ID. Those values are identifiers, not passwords. They do not grant Drive access without a signed-in Google account that already has permission to the folder.
 
+Record deletion is soft. The app hides deleted records by default, but the record JSON files remain in Google Drive with a `deletedAt` timestamp and can be restored from the app.
+
 ## 1. Create the repository
 
 The repository for this app is:

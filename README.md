@@ -34,6 +34,8 @@ The `Backup` button exports/imports a JSON snapshot for local fallback or manual
 
 Individual records have an `Export` button that opens a simple report view and the browser print dialog, which can be saved as PDF.
 
+Record deletion is intentionally soft. Deleted records disappear from normal tables but remain stored as JSON in Drive with a `deletedAt` timestamp. Use `Show deleted records` and `Restore` to recover them.
+
 The repository can be public when hosted on GitHub Pages. The public app shell exposes `config.js`, but notebook data and media remain in the shared Google Drive folder and require Drive permissions.
 
 ## Future backend path
