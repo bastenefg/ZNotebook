@@ -67,6 +67,7 @@ const ICONS = {
   backup: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7"/><path d="M4 7l2-3h12l2 3"/><path d="M9 14l3 3 3-3"/><path d="M12 10v7"/></svg>`,
   download: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>`,
   upload: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M5 3h14"/></svg>`,
+  print: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/><path d="M18 12h.01"/></svg>`,
   chevron: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`,
   bold: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h7a4 4 0 0 1 0 8H7z"/><path d="M7 13h8a4 4 0 0 1 0 8H7z"/></svg>`,
   italic: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5h8M6 19h8M14 5l-4 14"/></svg>`,
@@ -446,6 +447,17 @@ function formatUpdated(value) {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatDateTime(value) {
+  if (!value) return "Not recorded";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
@@ -920,6 +932,7 @@ async function renderDetailPage(id) {
         </div>
         <div class="topbar-actions">
           <span class="save-state" data-save-state>Saved</span>
+          <button class="btn ghost" type="button" data-action="export-current">${ICONS.print} Export</button>
           <a class="btn ghost" href="#/" title="Back to sections">Back</a>
         </div>
       </section>
@@ -1089,6 +1102,272 @@ function renderEditorToolbar() {
   `;
 }
 
+function syncActiveExperimentFromDetail() {
+  if (!activeExperiment) return;
+  app.querySelectorAll("[data-field]").forEach((field) => {
+    activeExperiment[field.dataset.field] = field.value;
+  });
+  app.querySelectorAll("[data-detail-column]").forEach((field) => {
+    activeExperiment.customFields = activeExperiment.customFields || {};
+    activeExperiment.customFields[field.dataset.detailColumn] = field.value;
+  });
+  const editor = app.querySelector("[data-editor]");
+  if (editor) activeExperiment.content = editor.innerHTML;
+}
+
+function reportFieldValue(column, experiment) {
+  if (column.kind === "builtin") {
+    if (column.field === "startDate") return formatDate(experiment.startDate);
+    if (column.field === "status") return taxonomyLabel("statuses", experiment.status);
+    if (column.field === "outcome") return taxonomyLabel("outcomes", experiment.outcome);
+    if (column.field === "labels") return (experiment.labels || []).join(", ") || "None";
+  }
+
+  const value = experiment.customFields && experiment.customFields[column.id];
+  if (!value) return "None";
+  if (column.type === "date") return formatDate(value);
+  return String(value);
+}
+
+function buildReportRows(section, experiment) {
+  const rows = section.columns.map((column) => ({
+    label: column.label,
+    value: reportFieldValue(column, experiment),
+  }));
+  rows.push(
+    { label: term("updated"), value: formatDateTime(experiment.updatedAt) },
+    { label: "Created", value: formatDateTime(experiment.createdAt) },
+  );
+  return rows;
+}
+
+function reportHtml(section, experiment) {
+  const reportRows = buildReportRows(section, experiment);
+  const summary = String(experiment.summary || "").trim();
+  const content = sanitizeHtml(experiment.content || "<p>No notes yet.</p>");
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>${escapeHtml(experiment.title)} report</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #15221b;
+        --muted: #5d6e65;
+        --line: #d7e0da;
+        --soft: #f5f7f4;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: white;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 46px 42px 64px;
+      }
+
+      header {
+        padding-bottom: 18px;
+        border-bottom: 2px solid var(--ink);
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 34px;
+        line-height: 1.15;
+      }
+
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0;
+        margin-top: 22px;
+        border: 1px solid var(--line);
+      }
+
+      .meta-item {
+        min-height: 58px;
+        padding: 11px 13px;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .meta-item:nth-child(2n) {
+        border-right: 0;
+      }
+
+      .meta-label {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .meta-value {
+        display: block;
+        margin-top: 5px;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      section {
+        margin-top: 28px;
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        font-size: 18px;
+      }
+
+      .summary {
+        margin: 0;
+        padding: 14px 16px;
+        border-left: 4px solid var(--ink);
+        background: var(--soft);
+        color: #26342d;
+      }
+
+      .notes {
+        overflow-wrap: anywhere;
+      }
+
+      .notes img,
+      .notes video {
+        max-width: 100%;
+        height: auto;
+        margin: 12px 0;
+        border: 1px solid var(--line);
+      }
+
+      .notes table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .notes th,
+      .notes td {
+        border: 1px solid var(--line);
+        padding: 8px;
+      }
+
+      @media print {
+        main {
+          padding: 0;
+        }
+
+        .meta-grid {
+          break-inside: avoid;
+        }
+
+        .notes img,
+        .notes video {
+          break-inside: avoid;
+        }
+      }
+
+      @media (max-width: 680px) {
+        main {
+          padding: 28px 18px 44px;
+        }
+
+        .meta-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .meta-item {
+          border-right: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">${escapeHtml(section.name)} report</p>
+        <h1>${escapeHtml(experiment.title)}</h1>
+      </header>
+
+      <section aria-label="Record details">
+        <div class="meta-grid">
+          ${reportRows
+            .map(
+              (row) => `
+                <div class="meta-item">
+                  <span class="meta-label">${escapeHtml(row.label)}</span>
+                  <span class="meta-value">${escapeHtml(row.value)}</span>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+      </section>
+
+      ${
+        summary
+          ? `<section>
+              <h2>${escapeHtml(term("summary"))}</h2>
+              <p class="summary">${escapeHtml(summary)}</p>
+            </section>`
+          : ""
+      }
+
+      <section>
+        <h2>Notes</h2>
+        <div class="notes">${content}</div>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+function exportActiveExperiment(section) {
+  syncActiveExperimentFromDetail();
+  const reportWindow = window.open("", "_blank");
+  if (!reportWindow) {
+    window.alert("Please allow pop-ups to export this report.");
+    return;
+  }
+
+  reportWindow.document.open();
+  reportWindow.document.write(reportHtml(section, activeExperiment));
+  reportWindow.document.close();
+
+  const printReport = () => {
+    reportWindow.focus();
+    reportWindow.print();
+  };
+
+  if (reportWindow.document.readyState === "complete") {
+    window.setTimeout(printReport, 100);
+  } else {
+    reportWindow.addEventListener("load", printReport, { once: true });
+  }
+}
+
 function bindDetailPage(section) {
   const editor = app.querySelector("[data-editor]");
 
@@ -1141,6 +1420,10 @@ function bindDetailPage(section) {
 
   app.querySelectorAll("[data-media-input]").forEach((input) => {
     input.addEventListener("change", () => insertMedia(input));
+  });
+
+  app.querySelector("[data-action='export-current']").addEventListener("click", () => {
+    exportActiveExperiment(section);
   });
 
   app.querySelector("[data-action='delete-current']").addEventListener("click", async () => {

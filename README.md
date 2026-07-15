@@ -32,6 +32,8 @@ Use `SETUP_CHECKLIST.md` for a step-by-step rollout checklist. The hosted `priva
 
 The `Backup` button exports/imports a JSON snapshot for local fallback or manual transfer. Drive-mode media files remain in Google Drive; the backup stores their Drive references.
 
+Individual records have an `Export` button that opens a simple report view and the browser print dialog, which can be saved as PDF.
+
 The repository can be public when hosted on GitHub Pages. The public app shell exposes `config.js`, but notebook data and media remain in the shared Google Drive folder and require Drive permissions.
 
 ## Future backend path
