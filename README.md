@@ -22,11 +22,11 @@ Built-in field names can be renamed through `Edit labels`. New sections can be c
 
 ## Hosting path
 
-The app can now run locally or connect to a shared Google Drive folder. In Drive mode, sections, columns, and records are written into the shared folder so lab members with access can open the hosted app and load the same notebook.
+The app can now run locally or connect to a shared Google Drive folder. In Drive mode, sections, columns, and records are written into the shared folder so lab members with access can open the hosted app, sign in, select that folder with Google Picker, and load the same notebook.
 
 For setup instructions, see `DEPLOYMENT.md`. For the exact GitHub Pages steps, see `GITHUB_PAGES.md`.
 
-For a hosted shared notebook, put the Google OAuth Client ID and Drive folder ID in `config.js` before deployment. Then lab members only need to open the app URL and click `Connect Drive`.
+For a hosted shared notebook, put the Google OAuth Client ID, Drive folder ID, restricted Google Picker API key, and Google Cloud project number in `config.js` before deployment. Then lab members only need to open the app URL, click `Connect Drive`, sign in, and choose the shared folder.
 
 Use `SETUP_CHECKLIST.md` for a step-by-step rollout checklist. The hosted `privacy.html` page can be used on the Google OAuth consent screen if Google asks for a privacy policy URL.
 
@@ -36,7 +36,7 @@ Individual records have an `Export` button that opens a simple report view and t
 
 Record deletion is intentionally soft. Deleted records disappear from normal tables but remain stored as JSON in Drive with a `deletedAt` timestamp. Use `Show deleted records` and `Restore` to recover them.
 
-The repository can be public when hosted on GitHub Pages. The public app shell exposes `config.js`, but notebook data and media remain in the shared Google Drive folder and require Drive permissions.
+The repository can be public when hosted on GitHub Pages. The public app shell exposes `config.js`, including a restricted Picker API key, but notebook data and media remain in the shared Google Drive folder and require Drive permission plus explicit folder selection.
 
 ## Future backend path
 

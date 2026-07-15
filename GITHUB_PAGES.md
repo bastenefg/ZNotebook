@@ -2,7 +2,7 @@
 
 This app is safe to host as a public static site because the site only serves the app shell. Notebook records, note contents, images, and videos are stored in the configured Google Drive folder and remain protected by that folder's sharing permissions.
 
-Public files include `config.js`, which contains the Google OAuth Client ID and Drive folder ID. Those values are identifiers, not passwords. They do not grant Drive access without a signed-in Google account that already has permission to the folder.
+Public files include `config.js`, which contains the Google OAuth Client ID, Drive folder ID, Google Cloud project number, and restricted Google Picker API key. These values are not an OAuth client secret. The API key must stay restricted to Google Picker and the hosted GitHub Pages referrer. They do not grant Drive data access without a signed-in Google account that already has permission to the folder and explicitly selects it in Google Picker.
 
 Record deletion is soft. The app hides deleted records by default, but the record JSON files remain in Google Drive with a `deletedAt` timestamp and can be restored from the app.
 
@@ -74,7 +74,7 @@ https://bastenefg.github.io/ZNotebook/privacy.html
 
 ## 5. Test
 
-Open the GitHub Pages URL, click `Connect Drive`, and sign in with a Google account that has access to the shared Drive folder.
+Open the GitHub Pages URL, click `Connect Drive`, sign in with a Google account that has access to the shared Drive folder, and select that folder in Google Picker.
 
 Confirm:
 

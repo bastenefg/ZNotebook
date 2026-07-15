@@ -3,7 +3,7 @@ const DB_VERSION = 1;
 const STORE = "experiments";
 const TAXONOMY_KEY = "labbook-taxonomy-v1";
 const DRIVE_SETTINGS_KEY = "definitely-not-notion-drive-v1";
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const DRIVE_CONFIG_NAME = "definitely-not-notion.config.json";
 const DRIVE_RECORDS_FOLDER_NAME = "records";
 const DRIVE_ASSETS_FOLDER_NAME = "assets";
@@ -93,6 +93,7 @@ let saveTimer = null;
 let currentFilters = { search: "", showDeleted: false };
 let taxonomy = loadTaxonomy();
 let driveSettings = loadDriveSettings();
+let googlePickerLoadPromise = null;
 let driveState = {
   connected: false,
   accessToken: "",
@@ -190,29 +191,51 @@ function normalizeSection(section) {
 }
 
 function loadDriveSettings() {
+  const hosted = window.DEFINITELY_NOT_NOTION_CONFIG || {};
   try {
     const saved = JSON.parse(localStorage.getItem(DRIVE_SETTINGS_KEY) || "{}");
-    const hosted = window.DEFINITELY_NOT_NOTION_CONFIG || {};
+    const folderId = saved.folderId || hosted.googleDriveFolderId || "";
     return {
       clientId: saved.clientId || hosted.googleClientId || "",
-      folderId: saved.folderId || hosted.googleDriveFolderId || "",
-      configuredByHost: Boolean(hosted.googleClientId && hosted.googleDriveFolderId),
+      folderId,
+      folderName: saved.folderName || "",
+      apiKey: saved.apiKey || hosted.googleApiKey || "",
+      appId: saved.appId || hosted.googleAppId || "",
+      expectedFolderId: saved.expectedFolderId || hosted.googleDriveFolderId || "",
+      selectedByPicker: Boolean(saved.selectedByPicker && saved.folderId === folderId),
+      configuredByHost: Boolean(
+        hosted.googleClientId && hosted.googleDriveFolderId && hosted.googleApiKey && hosted.googleAppId,
+      ),
     };
   } catch {
-    const hosted = window.DEFINITELY_NOT_NOTION_CONFIG || {};
     return {
       clientId: hosted.googleClientId || "",
       folderId: hosted.googleDriveFolderId || "",
-      configuredByHost: Boolean(hosted.googleClientId && hosted.googleDriveFolderId),
+      folderName: "",
+      apiKey: hosted.googleApiKey || "",
+      appId: hosted.googleAppId || "",
+      expectedFolderId: hosted.googleDriveFolderId || "",
+      selectedByPicker: false,
+      configuredByHost: Boolean(
+        hosted.googleClientId && hosted.googleDriveFolderId && hosted.googleApiKey && hosted.googleAppId,
+      ),
     };
   }
 }
 
 function saveDriveSettings(settings) {
+  const hosted = window.DEFINITELY_NOT_NOTION_CONFIG || {};
   driveSettings = {
     clientId: settings.clientId || "",
     folderId: settings.folderId || "",
-    configuredByHost: false,
+    folderName: settings.folderName || "",
+    apiKey: settings.apiKey || "",
+    appId: settings.appId || "",
+    expectedFolderId: settings.expectedFolderId || "",
+    selectedByPicker: Boolean(settings.selectedByPicker),
+    configuredByHost: Boolean(
+      hosted.googleClientId && hosted.googleDriveFolderId && hosted.googleApiKey && hosted.googleAppId,
+    ),
   };
   localStorage.setItem(DRIVE_SETTINGS_KEY, JSON.stringify(driveSettings));
 }
@@ -1757,6 +1780,7 @@ function wireDialogClose(dialog) {
 
 function openDriveDialog() {
   const hasHostedConfig = Boolean(driveSettings.configuredByHost);
+  const hasSelectedFolder = Boolean(driveSettings.selectedByPicker && driveSettings.folderId);
   const dialog = document.createElement("div");
   dialog.className = "dialog-backdrop";
   dialog.innerHTML = `
@@ -1764,15 +1788,25 @@ function openDriveDialog() {
       <h2>Google Drive storage</h2>
       <p class="dialog-copy">${
         hasHostedConfig
-          ? "This app is already configured for a shared Drive notebook. Connect with Google to load it."
-          : "Use a shared Drive folder as the notebook store. Paste the setup values once, then connect with Google."
+          ? "This app is configured for a shared Drive notebook. Sign in, then choose the shared folder in Google Picker."
+          : "Use a shared Drive folder as the notebook store. Add the Google setup values, then choose the folder in Google Picker."
       }</p>
       ${
         hasHostedConfig
           ? `<div class="config-summary">
               <strong>Configured by this site</strong>
-              <span>Folder ID: ${escapeHtml(driveSettings.folderId)}</span>
+              <span>Restricted Picker setup is available.</span>
+              <span>Expected folder ID: ${escapeHtml(driveSettings.expectedFolderId || driveSettings.folderId)}</span>
               <button class="btn ghost" type="button" data-action="show-drive-fields">Edit setup</button>
+            </div>`
+          : ""
+      }
+      ${
+        hasSelectedFolder
+          ? `<div class="config-summary">
+              <strong>Selected Drive folder</strong>
+              <span>${escapeHtml(driveSettings.folderName || driveSettings.folderId)}</span>
+              <button class="btn ghost" type="button" data-action="choose-drive-folder">Choose again</button>
             </div>`
           : ""
       }
@@ -1783,10 +1817,22 @@ function openDriveDialog() {
         )}" placeholder="1234567890-abc.apps.googleusercontent.com" />
       </div>
       <div class="field-group ${hasHostedConfig ? "hidden" : ""}" data-drive-advanced>
-        <label class="field-label" for="driveFolderId">Shared Drive folder ID</label>
+        <label class="field-label" for="driveFolderId">Expected shared folder ID</label>
         <input id="driveFolderId" class="field" name="folderId" value="${escapeHtml(
-          driveSettings.folderId,
+          driveSettings.expectedFolderId || driveSettings.folderId,
         )}" placeholder="Folder ID from the Google Drive URL" />
+      </div>
+      <div class="field-group ${hasHostedConfig ? "hidden" : ""}" data-drive-advanced>
+        <label class="field-label" for="driveApiKey">Restricted Google Picker API key</label>
+        <input id="driveApiKey" class="field" name="apiKey" value="${escapeHtml(
+          driveSettings.apiKey,
+        )}" placeholder="AIza..." />
+      </div>
+      <div class="field-group ${hasHostedConfig ? "hidden" : ""}" data-drive-advanced>
+        <label class="field-label" for="driveAppId">Google Cloud project number</label>
+        <input id="driveAppId" class="field" name="appId" value="${escapeHtml(
+          driveSettings.appId,
+        )}" placeholder="123456789012" />
       </div>
       <div class="dialog-actions">
         <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
@@ -1795,7 +1841,9 @@ function openDriveDialog() {
             ? `<button class="btn ghost" type="button" data-action="drive-disconnect">Use local only</button>`
             : ""
         }
-        <button class="btn primary" type="submit">Connect</button>
+        <button class="btn primary" type="submit">${
+          hasSelectedFolder ? "Connect" : "Select folder & connect"
+        }</button>
       </div>
     </form>
   `;
@@ -1814,20 +1862,43 @@ function openDriveDialog() {
     dialog.remove();
     await route();
   });
+  dialog.querySelector("[data-action='choose-drive-folder']")?.addEventListener("click", async () => {
+    saveDriveSettings({
+      ...driveSettings,
+      folderName: "",
+      selectedByPicker: false,
+    });
+    driveState.status = "Connecting...";
+    dialog.remove();
+    await route();
+    await connectDrive();
+  });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = new FormData(form);
     const clientId = String(data.get("clientId") || "").trim();
     const folderId = String(data.get("folderId") || "").trim();
-    if (!clientId || !folderId) return;
+    const apiKey = String(data.get("apiKey") || "").trim();
+    const appId = String(data.get("appId") || "").trim();
+    if (!clientId || !apiKey || !appId) return;
 
-    if (hasHostedConfig && clientId === driveSettings.clientId && folderId === driveSettings.folderId) {
-      localStorage.removeItem(DRIVE_SETTINGS_KEY);
-      driveSettings = loadDriveSettings();
-    } else {
-      saveDriveSettings({ clientId, folderId });
-    }
+    const selectionStillValid =
+      driveSettings.selectedByPicker &&
+      driveSettings.folderId === folderId &&
+      driveSettings.clientId === clientId &&
+      driveSettings.apiKey === apiKey &&
+      driveSettings.appId === appId;
+
+    saveDriveSettings({
+      clientId,
+      folderId,
+      folderName: selectionStillValid ? driveSettings.folderName : "",
+      apiKey,
+      appId,
+      expectedFolderId: folderId,
+      selectedByPicker: selectionStillValid,
+    });
     driveState.status = "Connecting...";
     await route();
     dialog.remove();
@@ -1995,11 +2066,53 @@ function loadGoogleIdentityScript() {
   });
 }
 
+function loadGooglePickerScript() {
+  if (window.google?.picker) return Promise.resolve();
+  if (googlePickerLoadPromise) return googlePickerLoadPromise;
+
+  googlePickerLoadPromise = new Promise((resolve, reject) => {
+    const loadPicker = () => {
+      if (!window.gapi) {
+        reject(new Error("Google Picker could not load the Google API client."));
+        return;
+      }
+      gapi.load("picker", {
+        callback: resolve,
+        onerror: () => reject(new Error("Google Picker could not load.")),
+        ontimeout: () => reject(new Error("Google Picker timed out while loading.")),
+        timeout: 10000,
+      });
+    };
+
+    const existing = document.querySelector("script[data-google-api]");
+    if (existing) {
+      existing.addEventListener("load", loadPicker, { once: true });
+      existing.addEventListener("error", reject, { once: true });
+      if (window.gapi) loadPicker();
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://apis.google.com/js/api.js";
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleApi = "true";
+    script.onload = loadPicker;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+
+  return googlePickerLoadPromise;
+}
+
 async function connectDrive() {
   try {
     await loadGoogleIdentityScript();
-    const token = await requestDriveToken();
+    const token = await requestDriveTokenWithFallback();
     driveState.accessToken = token;
+    driveState.status = "Selecting Drive folder...";
+    await route();
+    await ensureDriveFolderSelection();
     driveState.connected = true;
     driveState.status = "Drive connected";
     await initializeDriveWorkspace();
@@ -2011,20 +2124,111 @@ async function connectDrive() {
   }
 }
 
-function requestDriveToken() {
+async function requestDriveTokenWithFallback() {
+  const quietReconnect = driveSettings.selectedByPicker;
+  try {
+    return await requestDriveToken(quietReconnect ? "" : "consent");
+  } catch (error) {
+    if (quietReconnect && isGoogleInteractionRequired(error)) {
+      return requestDriveToken("consent");
+    }
+    throw error;
+  }
+}
+
+function requestDriveToken(prompt = "") {
   return new Promise((resolve, reject) => {
     const client = google.accounts.oauth2.initTokenClient({
       client_id: driveSettings.clientId,
       scope: DRIVE_SCOPE,
+      include_granted_scopes: false,
       callback: (response) => {
         if (response.error) {
-          reject(new Error(response.error_description || response.error));
+          const error = new Error(response.error_description || response.error);
+          error.code = response.error;
+          reject(error);
           return;
         }
         resolve(response.access_token);
       },
     });
-    client.requestAccessToken({ prompt: "" });
+    client.requestAccessToken({ prompt });
+  });
+}
+
+function isGoogleInteractionRequired(error) {
+  return ["interaction_required", "login_required", "consent_required"].includes(error?.code);
+}
+
+async function ensureDriveFolderSelection() {
+  const selectionMatchesExpected =
+    !driveSettings.expectedFolderId || driveSettings.folderId === driveSettings.expectedFolderId;
+  if (driveSettings.folderId && driveSettings.selectedByPicker && selectionMatchesExpected) return;
+
+  if (!driveSettings.apiKey || !driveSettings.appId) {
+    throw new Error(
+      "Google Picker is not configured. Add a restricted Google Picker API key and Google Cloud project number in config.js.",
+    );
+  }
+
+  const folder = await pickDriveFolder();
+  if (driveSettings.expectedFolderId && folder.id !== driveSettings.expectedFolderId) {
+    throw new Error(
+      "That is not the configured shared ZNotebook folder. Please choose the folder that was shared with your lab team.",
+    );
+  }
+
+  saveDriveSettings({
+    ...driveSettings,
+    folderId: folder.id,
+    folderName: folder.name,
+    selectedByPicker: true,
+  });
+}
+
+async function pickDriveFolder() {
+  await loadGooglePickerScript();
+
+  return new Promise((resolve, reject) => {
+    const folderView = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+      .setIncludeFolders(true)
+      .setSelectFolderEnabled(true)
+      .setMimeTypes("application/vnd.google-apps.folder");
+    if (google.picker.DocsViewMode?.LIST) {
+      folderView.setMode(google.picker.DocsViewMode.LIST);
+    }
+
+    const builder = new google.picker.PickerBuilder()
+      .setAppId(driveSettings.appId)
+      .setDeveloperKey(driveSettings.apiKey)
+      .setOAuthToken(driveState.accessToken)
+      .setTitle("Select the shared ZNotebook folder")
+      .addView(folderView)
+      .setCallback((data) => {
+        const action = data[google.picker.Response.ACTION] || data.action;
+        if (action === google.picker.Action.CANCEL) {
+          reject(new Error("Drive folder selection was cancelled."));
+          return;
+        }
+
+        if (action !== google.picker.Action.PICKED) return;
+
+        const docs = data[google.picker.Response.DOCUMENTS] || data.docs || [];
+        const doc = docs[0];
+        const id = doc?.[google.picker.Document.ID] || doc?.id;
+        const name = doc?.[google.picker.Document.NAME] || doc?.name || "Selected folder";
+        if (!id) {
+          reject(new Error("Google Picker did not return a folder ID."));
+          return;
+        }
+        resolve({ id, name });
+      });
+
+    if (google.picker.Feature?.SUPPORT_DRIVES) {
+      builder.enableFeature(google.picker.Feature.SUPPORT_DRIVES);
+    }
+
+    builder.build().setVisible(true);
   });
 }
 

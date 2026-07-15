@@ -6,11 +6,11 @@ Definitely not Notion is a static lab notebook app. It does not include a hosted
 
 In local-only mode, notebook records and uploaded media are stored in your browser's IndexedDB storage on your device.
 
-In Google Drive mode, notebook configuration, record JSON files, images, and videos are stored in the shared Google Drive folder configured for the notebook. The app is designed to read and write the notebook files in that folder.
+In Google Drive mode, notebook configuration, record JSON files, images, and videos are stored in the shared Google Drive folder configured for the notebook. The app is designed to read and write the notebook files in the folder that the user explicitly selects with Google Picker.
 
 ## Google sign-in and Drive access
 
-When you connect Google Drive, the app requests a Google access token in your browser so it can use the Google Drive API. The token is kept in browser memory for the current session and is not sent to any separate backend service.
+When you connect Google Drive, the app requests a Google access token in your browser so it can use the Google Drive API with the limited `drive.file` scope. The app uses Google Picker so you explicitly choose the shared notebook folder. The token is kept in browser memory for the current session and is not sent to any separate backend service.
 
 ## Who can see notebook data
 

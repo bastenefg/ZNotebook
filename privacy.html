@@ -77,14 +77,16 @@
       <p>
         In Google Drive mode, notebook configuration, record JSON files, images, and videos are
         stored in the shared Google Drive folder configured for the notebook. The app is designed
-        to read and write the notebook files in that folder.
+        to read and write the notebook files in the folder that the user explicitly selects with
+        Google Picker.
       </p>
 
       <h2>Google sign-in and Drive access</h2>
       <p>
         When you connect Google Drive, the app requests a Google access token in your browser so it
-        can use the Google Drive API. The token is kept in browser memory for the current session
-        and is not sent to any separate backend service.
+        can use the Google Drive API with the limited drive.file scope. The app uses Google Picker
+        so you explicitly choose the shared notebook folder. The token is kept in browser memory
+        for the current session and is not sent to any separate backend service.
       </p>
 
       <h2>Who can see notebook data</h2>
