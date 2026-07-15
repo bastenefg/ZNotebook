@@ -24,13 +24,15 @@ Built-in field names can be renamed through `Edit labels`. New sections can be c
 
 The app can now run locally or connect to a shared Google Drive folder. In Drive mode, sections, columns, and records are written into the shared folder so lab members with access can open the hosted app and load the same notebook.
 
-For setup instructions, see `DEPLOYMENT.md`.
+For setup instructions, see `DEPLOYMENT.md`. For the exact GitHub Pages steps, see `GITHUB_PAGES.md`.
 
 For a hosted shared notebook, put the Google OAuth Client ID and Drive folder ID in `config.js` before deployment. Then lab members only need to open the app URL and click `Connect Drive`.
 
 Use `SETUP_CHECKLIST.md` for a step-by-step rollout checklist. The hosted `privacy.html` page can be used on the Google OAuth consent screen if Google asks for a privacy policy URL.
 
 The `Backup` button exports/imports a JSON snapshot for local fallback or manual transfer. Drive-mode media files remain in Google Drive; the backup stores their Drive references.
+
+The repository can be public when hosted on GitHub Pages. The public app shell exposes `config.js`, but notebook data and media remain in the shared Google Drive folder and require Drive permissions.
 
 ## Future backend path
 

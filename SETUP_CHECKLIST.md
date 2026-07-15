@@ -18,7 +18,7 @@ Use this as the practical rollout checklist for a shared lab notebook.
 - Use the hosted app URL as the application home page.
 - Use `https://YOUR_HOSTED_APP_URL/privacy.html` as the privacy policy URL.
 - Create a `Web application` OAuth Client ID.
-- Add the app origin as an authorized JavaScript origin, for example `https://YOUR_GITHUB_USERNAME.github.io`.
+- Add the app origin as an authorized JavaScript origin, for example `https://YOUR_GITHUB_USERNAME.github.io`. Do not include the repository path.
 
 ## 3. Configure the app
 
@@ -33,8 +33,8 @@ window.DEFINITELY_NOT_NOTION_CONFIG = {
 
 ## 4. Host the files
 
-- Put the files in a GitHub repository.
-- Enable GitHub Pages for the repository.
+- Put the files in a public GitHub repository.
+- Enable GitHub Pages for the repository from the `main` branch and `/ (root)` folder.
 - Open the hosted URL and confirm the app loads.
 
 ## 5. Test before rollout
