@@ -6,27 +6,27 @@ Public files include `config.js`, which contains the Google OAuth Client ID and 
 
 ## 1. Create the repository
 
-Create a new public GitHub repository, for example:
+The repository for this app is:
 
 ```text
-definitely-not-notion-labbook
+https://github.com/bastenefg/ZNotebook
 ```
 
-Do not initialize it with a README, license, or `.gitignore` if you plan to push this existing local repository.
+It is public so GitHub Pages can serve the app shell.
 
 ## 2. Push the local app
 
 From this folder, add your GitHub repository as `origin`:
 
 ```powershell
-git remote add origin https://github.com/YOUR_GITHUB_USERNAME/definitely-not-notion-labbook.git
+git remote add origin https://github.com/bastenefg/ZNotebook.git
 git push -u origin main
 ```
 
 If `origin` already exists, replace it:
 
 ```powershell
-git remote set-url origin https://github.com/YOUR_GITHUB_USERNAME/definitely-not-notion-labbook.git
+git remote set-url origin https://github.com/bastenefg/ZNotebook.git
 git push -u origin main
 ```
 
@@ -43,13 +43,13 @@ In GitHub:
 The app URL will usually be:
 
 ```text
-https://YOUR_GITHUB_USERNAME.github.io/definitely-not-notion-labbook/
+https://bastenefg.github.io/ZNotebook/
 ```
 
 If you create a user site repository named `YOUR_GITHUB_USERNAME.github.io`, the URL will be:
 
 ```text
-https://YOUR_GITHUB_USERNAME.github.io/
+https://bastenefg.github.io/
 ```
 
 ## 4. Update Google OAuth
@@ -59,7 +59,7 @@ In your Google OAuth Client, add the GitHub Pages origin under `Authorized JavaS
 For a project site, use only the origin:
 
 ```text
-https://YOUR_GITHUB_USERNAME.github.io
+https://bastenefg.github.io
 ```
 
 Do not include the repository path in the authorized origin.
@@ -67,7 +67,7 @@ Do not include the repository path in the authorized origin.
 Use the hosted privacy page as the privacy policy URL if Google asks:
 
 ```text
-https://YOUR_GITHUB_USERNAME.github.io/definitely-not-notion-labbook/privacy.html
+https://bastenefg.github.io/ZNotebook/privacy.html
 ```
 
 ## 5. Test
