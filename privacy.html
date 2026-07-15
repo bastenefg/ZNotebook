@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy - Definitely not Notion</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17211c;
+        --muted: #65746d;
+        --line: #d9e2dd;
+        --paper: #fbfcfb;
+        --accent: #2d6f62;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 56px 24px 80px;
+      }
+
+      h1,
+      h2 {
+        line-height: 1.2;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: clamp(2rem, 5vw, 3.5rem);
+      }
+
+      h2 {
+        margin-top: 36px;
+        font-size: 1.15rem;
+      }
+
+      p,
+      li {
+        color: var(--muted);
+      }
+
+      a {
+        color: var(--accent);
+      }
+
+      .updated {
+        padding-bottom: 24px;
+        border-bottom: 1px solid var(--line);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Privacy</h1>
+      <p class="updated">Last updated: July 15, 2026</p>
+
+      <p>
+        Definitely not Notion is a static lab notebook app. It does not include a hosted
+        application server, analytics service, or advertising tracker.
+      </p>
+
+      <h2>What the app stores</h2>
+      <p>
+        In local-only mode, notebook records and uploaded media are stored in your browser's
+        IndexedDB storage on your device.
+      </p>
+      <p>
+        In Google Drive mode, notebook configuration, record JSON files, images, and videos are
+        stored in the shared Google Drive folder configured for the notebook. The app is designed
+        to read and write the notebook files in that folder.
+      </p>
+
+      <h2>Google sign-in and Drive access</h2>
+      <p>
+        When you connect Google Drive, the app requests a Google access token in your browser so it
+        can use the Google Drive API. The token is kept in browser memory for the current session
+        and is not sent to any separate backend service.
+      </p>
+
+      <h2>Who can see notebook data</h2>
+      <p>
+        People who can access the configured Google Drive folder can see the notebook files stored
+        there. Manage notebook membership by changing sharing permissions on that Drive folder.
+      </p>
+
+      <h2>How to remove access or data</h2>
+      <ul>
+        <li>Remove a person from the shared Google Drive folder to revoke notebook data access.</li>
+        <li>Delete the notebook files from Drive to remove shared notebook data.</li>
+        <li>
+          Revoke the app's Google access from your Google Account security settings if you no
+          longer want to use Drive sync.
+        </li>
+      </ul>
+    </main>
+  </body>
+</html>
