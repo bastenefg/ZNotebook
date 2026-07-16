@@ -3,10 +3,7 @@ const DB_VERSION = 1;
 const STORE = "experiments";
 const TAXONOMY_KEY = "labbook-taxonomy-v1";
 const DRIVE_SETTINGS_KEY = "definitely-not-notion-drive-v1";
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
-const DRIVE_CONFIG_NAME = "definitely-not-notion.config.json";
-const DRIVE_RECORDS_FOLDER_NAME = "records";
-const DRIVE_ASSETS_FOLDER_NAME = "assets";
+const BACKEND_CREDENTIAL_KEY = "definitely-not-notion-backend-credential-v1";
 const DEFAULT_SECTION_ID = "experiments";
 
 const DEFAULT_STATUSES = [
@@ -93,16 +90,10 @@ let saveTimer = null;
 let currentFilters = { search: "", showDeleted: false };
 let taxonomy = loadTaxonomy();
 let driveSettings = loadDriveSettings();
-let googlePickerLoadPromise = null;
 let driveState = {
   connected: false,
   accessToken: "",
-  configFileId: "",
-  recordsFolderId: "",
-  assetsFolderId: "",
-  assetFolderIds: {},
   assetObjectUrls: [],
-  recordFileIds: {},
   recordModifiedTimes: {},
   status: "Local only",
 };
@@ -194,31 +185,16 @@ function loadDriveSettings() {
   const hosted = window.DEFINITELY_NOT_NOTION_CONFIG || {};
   try {
     const saved = JSON.parse(localStorage.getItem(DRIVE_SETTINGS_KEY) || "{}");
-    const folderId = saved.folderId || hosted.googleDriveFolderId || "";
     return {
       clientId: saved.clientId || hosted.googleClientId || "",
-      folderId,
-      folderName: saved.folderName || "",
-      apiKey: saved.apiKey || hosted.googleApiKey || "",
-      appId: saved.appId || hosted.googleAppId || "",
-      expectedFolderId: saved.expectedFolderId || hosted.googleDriveFolderId || "",
-      selectedByPicker: Boolean(saved.selectedByPicker && saved.folderId === folderId),
-      configuredByHost: Boolean(
-        hosted.googleClientId && hosted.googleDriveFolderId && hosted.googleApiKey && hosted.googleAppId,
-      ),
+      backendUrl: normalizeBackendUrl(saved.backendUrl || hosted.backendUrl || ""),
+      configuredByHost: Boolean(hosted.googleClientId && hosted.backendUrl),
     };
   } catch {
     return {
       clientId: hosted.googleClientId || "",
-      folderId: hosted.googleDriveFolderId || "",
-      folderName: "",
-      apiKey: hosted.googleApiKey || "",
-      appId: hosted.googleAppId || "",
-      expectedFolderId: hosted.googleDriveFolderId || "",
-      selectedByPicker: false,
-      configuredByHost: Boolean(
-        hosted.googleClientId && hosted.googleDriveFolderId && hosted.googleApiKey && hosted.googleAppId,
-      ),
+      backendUrl: normalizeBackendUrl(hosted.backendUrl || ""),
+      configuredByHost: Boolean(hosted.googleClientId && hosted.backendUrl),
     };
   }
 }
@@ -227,17 +203,14 @@ function saveDriveSettings(settings) {
   const hosted = window.DEFINITELY_NOT_NOTION_CONFIG || {};
   driveSettings = {
     clientId: settings.clientId || "",
-    folderId: settings.folderId || "",
-    folderName: settings.folderName || "",
-    apiKey: settings.apiKey || "",
-    appId: settings.appId || "",
-    expectedFolderId: settings.expectedFolderId || "",
-    selectedByPicker: Boolean(settings.selectedByPicker),
-    configuredByHost: Boolean(
-      hosted.googleClientId && hosted.googleDriveFolderId && hosted.googleApiKey && hosted.googleAppId,
-    ),
+    backendUrl: normalizeBackendUrl(settings.backendUrl || ""),
+    configuredByHost: Boolean(hosted.googleClientId && hosted.backendUrl),
   };
   localStorage.setItem(DRIVE_SETTINGS_KEY, JSON.stringify(driveSettings));
+}
+
+function normalizeBackendUrl(value = "") {
+  return String(value).trim().replace(/\/+$/, "");
 }
 
 function normalizeColumn(column) {
@@ -753,12 +726,7 @@ function resetDriveState(status = "Local only") {
   driveState = {
     connected: false,
     accessToken: "",
-    configFileId: "",
-    recordsFolderId: "",
-    assetsFolderId: "",
-    assetFolderIds: {},
     assetObjectUrls: [],
-    recordFileIds: {},
     recordModifiedTimes: {},
     status,
   };
@@ -1780,33 +1748,22 @@ function wireDialogClose(dialog) {
 
 function openDriveDialog() {
   const hasHostedConfig = Boolean(driveSettings.configuredByHost);
-  const hasSelectedFolder = Boolean(driveSettings.selectedByPicker && driveSettings.folderId);
   const dialog = document.createElement("div");
   dialog.className = "dialog-backdrop";
   dialog.innerHTML = `
-    <form class="panel dialog" data-drive-form>
-      <h2>Google Drive storage</h2>
+    <div class="panel dialog" data-drive-dialog>
+      <h2>Notebook backend</h2>
       <p class="dialog-copy">${
         hasHostedConfig
-          ? "This app is configured for a shared Drive notebook. Sign in, then choose the shared folder in Google Picker."
-          : "Use a shared Drive folder as the notebook store. Add the Google setup values, then choose the folder in Google Picker."
+          ? "Sign in with an allowed Google account. The private backend handles Drive storage."
+          : "Add the backend setup values, then sign in with an allowed Google account."
       }</p>
       ${
         hasHostedConfig
           ? `<div class="config-summary">
               <strong>Configured by this site</strong>
-              <span>Restricted Picker setup is available.</span>
-              <span>Expected folder ID: ${escapeHtml(driveSettings.expectedFolderId || driveSettings.folderId)}</span>
+              <span>Backend: ${escapeHtml(driveSettings.backendUrl || "Not set yet")}</span>
               <button class="btn ghost" type="button" data-action="show-drive-fields">Edit setup</button>
-            </div>`
-          : ""
-      }
-      ${
-        hasSelectedFolder
-          ? `<div class="config-summary">
-              <strong>Selected Drive folder</strong>
-              <span>${escapeHtml(driveSettings.folderName || driveSettings.folderId)}</span>
-              <button class="btn ghost" type="button" data-action="choose-drive-folder">Choose again</button>
             </div>`
           : ""
       }
@@ -1817,39 +1774,28 @@ function openDriveDialog() {
         )}" placeholder="1234567890-abc.apps.googleusercontent.com" />
       </div>
       <div class="field-group ${hasHostedConfig ? "hidden" : ""}" data-drive-advanced>
-        <label class="field-label" for="driveFolderId">Expected shared folder ID</label>
-        <input id="driveFolderId" class="field" name="folderId" value="${escapeHtml(
-          driveSettings.expectedFolderId || driveSettings.folderId,
-        )}" placeholder="Folder ID from the Google Drive URL" />
+        <label class="field-label" for="driveBackendUrl">Cloud Run backend URL</label>
+        <input id="driveBackendUrl" class="field" name="backendUrl" value="${escapeHtml(
+          driveSettings.backendUrl,
+        )}" placeholder="https://znotebook-api-abc-uc.a.run.app" />
       </div>
-      <div class="field-group ${hasHostedConfig ? "hidden" : ""}" data-drive-advanced>
-        <label class="field-label" for="driveApiKey">Restricted Google Picker API key</label>
-        <input id="driveApiKey" class="field" name="apiKey" value="${escapeHtml(
-          driveSettings.apiKey,
-        )}" placeholder="AIza..." />
-      </div>
-      <div class="field-group ${hasHostedConfig ? "hidden" : ""}" data-drive-advanced>
-        <label class="field-label" for="driveAppId">Google Cloud project number</label>
-        <input id="driveAppId" class="field" name="appId" value="${escapeHtml(
-          driveSettings.appId,
-        )}" placeholder="123456789012" />
+      <div class="field-group">
+        <label class="field-label">Google sign-in</label>
+        <div data-google-signin></div>
       </div>
       <div class="dialog-actions">
         <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
+        <button class="btn ghost" type="button" data-action="save-drive-setup">Save setup</button>
         ${
           driveState.connected
             ? `<button class="btn ghost" type="button" data-action="drive-disconnect">Use local only</button>`
             : ""
         }
-        <button class="btn primary" type="submit">${
-          hasSelectedFolder ? "Connect" : "Select folder & connect"
-        }</button>
       </div>
-    </form>
+    </div>
   `;
 
   document.body.appendChild(dialog);
-  const form = dialog.querySelector("[data-drive-form]");
   wireDialogClose(dialog);
   dialog.querySelector("[data-action='show-drive-fields']")?.addEventListener("click", () => {
     dialog.querySelectorAll("[data-drive-advanced]").forEach((field) => {
@@ -1857,53 +1803,26 @@ function openDriveDialog() {
     });
     dialog.querySelector("[data-action='show-drive-fields']").classList.add("hidden");
   });
+  dialog.querySelector("[data-action='save-drive-setup']").addEventListener("click", () => {
+    const clientId = dialog.querySelector("#driveClientId")?.value.trim() || driveSettings.clientId;
+    const backendUrl =
+      dialog.querySelector("#driveBackendUrl")?.value.trim() || driveSettings.backendUrl;
+    if (!clientId || !backendUrl) {
+      window.alert("Add both the Google Client ID and Cloud Run backend URL.");
+      return;
+    }
+    saveDriveSettings({ clientId, backendUrl });
+    dialog.remove();
+    openDriveDialog();
+  });
   dialog.querySelector("[data-action='drive-disconnect']")?.addEventListener("click", async () => {
+    localStorage.removeItem(BACKEND_CREDENTIAL_KEY);
     resetDriveState();
     dialog.remove();
     await route();
   });
-  dialog.querySelector("[data-action='choose-drive-folder']")?.addEventListener("click", async () => {
-    saveDriveSettings({
-      ...driveSettings,
-      folderName: "",
-      selectedByPicker: false,
-    });
-    driveState.status = "Connecting...";
-    dialog.remove();
-    await route();
-    await connectDrive();
-  });
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const data = new FormData(form);
-    const clientId = String(data.get("clientId") || "").trim();
-    const folderId = String(data.get("folderId") || "").trim();
-    const apiKey = String(data.get("apiKey") || "").trim();
-    const appId = String(data.get("appId") || "").trim();
-    if (!clientId || !apiKey || !appId) return;
-
-    const selectionStillValid =
-      driveSettings.selectedByPicker &&
-      driveSettings.folderId === folderId &&
-      driveSettings.clientId === clientId &&
-      driveSettings.apiKey === apiKey &&
-      driveSettings.appId === appId;
-
-    saveDriveSettings({
-      clientId,
-      folderId,
-      folderName: selectionStillValid ? driveSettings.folderName : "",
-      apiKey,
-      appId,
-      expectedFolderId: folderId,
-      selectedByPicker: selectionStillValid,
-    });
-    driveState.status = "Connecting...";
-    await route();
-    dialog.remove();
-    await connectDrive();
-  });
+  renderBackendSignIn(dialog.querySelector("[data-google-signin]"), dialog);
 }
 
 function openBackupDialog() {
@@ -2043,7 +1962,7 @@ function normalizeBackupRecords(records) {
 
 function loadGoogleIdentityScript() {
   return new Promise((resolve, reject) => {
-    if (window.google?.accounts?.oauth2) {
+    if (window.google?.accounts?.id) {
       resolve();
       return;
     }
@@ -2066,234 +1985,124 @@ function loadGoogleIdentityScript() {
   });
 }
 
-function loadGooglePickerScript() {
-  if (window.google?.picker) return Promise.resolve();
-  if (googlePickerLoadPromise) return googlePickerLoadPromise;
-
-  googlePickerLoadPromise = new Promise((resolve, reject) => {
-    const loadPicker = () => {
-      if (!window.gapi) {
-        reject(new Error("Google Picker could not load the Google API client."));
-        return;
-      }
-      gapi.load("picker", {
-        callback: resolve,
-        onerror: () => reject(new Error("Google Picker could not load.")),
-        ontimeout: () => reject(new Error("Google Picker timed out while loading.")),
-        timeout: 10000,
-      });
-    };
-
-    const existing = document.querySelector("script[data-google-api]");
-    if (existing) {
-      existing.addEventListener("load", loadPicker, { once: true });
-      existing.addEventListener("error", reject, { once: true });
-      if (window.gapi) loadPicker();
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://apis.google.com/js/api.js";
-    script.async = true;
-    script.defer = true;
-    script.dataset.googleApi = "true";
-    script.onload = loadPicker;
-    script.onerror = reject;
-    document.head.appendChild(script);
-  });
-
-  return googlePickerLoadPromise;
-}
-
-async function connectDrive() {
-  try {
-    await loadGoogleIdentityScript();
-    const token = await requestDriveTokenWithFallback();
-    driveState.accessToken = token;
-    driveState.status = "Selecting Drive folder...";
-    await route();
-    await ensureDriveFolderSelection();
-    driveState.connected = true;
-    driveState.status = "Drive connected";
-    await initializeDriveWorkspace();
-    await loadDriveWorkspace();
-    await route();
-  } catch (error) {
-    handleDriveError(error);
-    await route();
-  }
-}
-
-async function requestDriveTokenWithFallback() {
-  const quietReconnect = driveSettings.selectedByPicker;
-  try {
-    return await requestDriveToken(quietReconnect ? "" : "consent");
-  } catch (error) {
-    if (quietReconnect && isGoogleInteractionRequired(error)) {
-      return requestDriveToken("consent");
-    }
-    throw error;
-  }
-}
-
-function requestDriveToken(prompt = "") {
-  return new Promise((resolve, reject) => {
-    const client = google.accounts.oauth2.initTokenClient({
-      client_id: driveSettings.clientId,
-      scope: DRIVE_SCOPE,
-      include_granted_scopes: false,
-      callback: (response) => {
-        if (response.error) {
-          const error = new Error(response.error_description || response.error);
-          error.code = response.error;
-          reject(error);
-          return;
-        }
-        resolve(response.access_token);
-      },
-    });
-    client.requestAccessToken({ prompt });
-  });
-}
-
-function isGoogleInteractionRequired(error) {
-  return ["interaction_required", "login_required", "consent_required"].includes(error?.code);
-}
-
-async function ensureDriveFolderSelection() {
-  const selectionMatchesExpected =
-    !driveSettings.expectedFolderId || driveSettings.folderId === driveSettings.expectedFolderId;
-  if (driveSettings.folderId && driveSettings.selectedByPicker && selectionMatchesExpected) return;
-
-  if (!driveSettings.apiKey || !driveSettings.appId) {
-    throw new Error(
-      "Google Picker is not configured. Add a restricted Google Picker API key and Google Cloud project number in config.js.",
-    );
-  }
-
-  const folder = await pickDriveFolder();
-  if (driveSettings.expectedFolderId && folder.id !== driveSettings.expectedFolderId) {
-    throw new Error(
-      "That is not the configured shared ZNotebook folder. Please choose the folder that was shared with your lab team.",
-    );
-  }
-
-  saveDriveSettings({
-    ...driveSettings,
-    folderId: folder.id,
-    folderName: folder.name,
-    selectedByPicker: true,
-  });
-}
-
-async function pickDriveFolder() {
-  await loadGooglePickerScript();
-
-  return new Promise((resolve, reject) => {
-    const folderView = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
-      .setIncludeFolders(true)
-      .setSelectFolderEnabled(true)
-      .setMimeTypes("application/vnd.google-apps.folder");
-    if (google.picker.DocsViewMode?.LIST) {
-      folderView.setMode(google.picker.DocsViewMode.LIST);
-    }
-
-    const builder = new google.picker.PickerBuilder()
-      .setAppId(driveSettings.appId)
-      .setDeveloperKey(driveSettings.apiKey)
-      .setOAuthToken(driveState.accessToken)
-      .setTitle("Select the shared ZNotebook folder")
-      .addView(folderView)
-      .setCallback((data) => {
-        const action = data[google.picker.Response.ACTION] || data.action;
-        if (action === google.picker.Action.CANCEL) {
-          reject(new Error("Drive folder selection was cancelled."));
-          return;
-        }
-
-        if (action !== google.picker.Action.PICKED) return;
-
-        const docs = data[google.picker.Response.DOCUMENTS] || data.docs || [];
-        const doc = docs[0];
-        const id = doc?.[google.picker.Document.ID] || doc?.id;
-        const name = doc?.[google.picker.Document.NAME] || doc?.name || "Selected folder";
-        if (!id) {
-          reject(new Error("Google Picker did not return a folder ID."));
-          return;
-        }
-        resolve({ id, name });
-      });
-
-    if (google.picker.Feature?.SUPPORT_DRIVES) {
-      builder.enableFeature(google.picker.Feature.SUPPORT_DRIVES);
-    }
-
-    builder.build().setVisible(true);
-  });
-}
-
-async function initializeDriveWorkspace() {
-  driveState.recordFileIds = {};
-  driveState.recordModifiedTimes = {};
-  driveState.assetFolderIds = {};
-  driveState.recordsFolderId = await driveEnsureFolder(
-    driveSettings.folderId,
-    DRIVE_RECORDS_FOLDER_NAME,
-  );
-  driveState.assetsFolderId = await driveEnsureFolder(
-    driveSettings.folderId,
-    DRIVE_ASSETS_FOLDER_NAME,
-  );
-  const configFile = await driveFindChild(driveSettings.folderId, DRIVE_CONFIG_NAME);
-  if (configFile) {
-    driveState.configFileId = configFile.id;
+async function renderBackendSignIn(container, dialog) {
+  if (!container) return;
+  if (!driveSettings.clientId || !driveSettings.backendUrl) {
+    container.innerHTML = `<p class="dialog-copy">Add the Google Client ID and Cloud Run backend URL first.</p>`;
     return;
   }
 
-  const created = await driveCreateJson(driveSettings.folderId, DRIVE_CONFIG_NAME, {
-    app: "Definitely not Notion",
-    version: 1,
-    taxonomy,
+  try {
+    await loadGoogleIdentityScript();
+    google.accounts.id.initialize({
+      client_id: driveSettings.clientId,
+      callback: async (response) => {
+        if (!response.credential) return;
+        try {
+          localStorage.setItem(BACKEND_CREDENTIAL_KEY, response.credential);
+          dialog.remove();
+          await connectDrive(response.credential);
+        } catch (error) {
+          handleDriveError(error);
+          await route();
+        }
+      },
+    });
+    google.accounts.id.renderButton(container, {
+      theme: "outline",
+      size: "large",
+      type: "standard",
+      text: "signin_with",
+      shape: "rectangular",
+      width: 260,
+    });
+  } catch (error) {
+    container.innerHTML = `<p class="dialog-copy">Google sign-in could not load.</p>`;
+    console.error(error);
+  }
+}
+
+async function connectDrive(credential) {
+  if (!driveSettings.clientId || !driveSettings.backendUrl) {
+    throw new Error("Backend storage is not configured yet.");
+  }
+
+  driveState.accessToken = credential;
+  driveState.status = "Connecting...";
+  await route();
+
+  const workspace = await backendRequest("/workspace/init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taxonomy, records: experiments }),
   });
-  driveState.configFileId = created.id;
-  await Promise.all(experiments.map((experiment) => driveSaveRecord(experiment)));
+  await applyWorkspaceSnapshot(workspace);
+  driveState.connected = true;
+  driveState.status = "Backend connected";
+  await route();
+}
+
+async function tryAutoConnectBackend() {
+  if (!driveSettings.backendUrl || !driveSettings.clientId) return;
+  const credential = localStorage.getItem(BACKEND_CREDENTIAL_KEY);
+  if (!isJwtLikelyValid(credential)) return;
+
+  try {
+    await connectDrive(credential);
+  } catch (error) {
+    console.warn("Could not reconnect to backend", error);
+    localStorage.removeItem(BACKEND_CREDENTIAL_KEY);
+    resetDriveState();
+  }
+}
+
+function isJwtLikelyValid(token) {
+  try {
+    const payloadPart = String(token).split(".")[1] || "";
+    const normalized = payloadPart.replaceAll("-", "+").replaceAll("_", "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const payload = JSON.parse(atob(padded));
+    return payload.exp && payload.exp * 1000 > Date.now() + 60000;
+  } catch {
+    return false;
+  }
+}
+
+async function initializeDriveWorkspace() {
+  return null;
 }
 
 async function loadDriveWorkspace() {
-  const config = await driveReadJson(driveState.configFileId);
-  if (config && config.taxonomy) {
+  const workspace = await backendRequest("/workspace");
+  await applyWorkspaceSnapshot(workspace);
+}
+
+async function applyWorkspaceSnapshot(workspace) {
+  if (workspace && workspace.taxonomy) {
     taxonomy = {
-      statuses: Array.isArray(config.taxonomy.statuses) ? config.taxonomy.statuses : [],
-      outcomes: Array.isArray(config.taxonomy.outcomes) ? config.taxonomy.outcomes : [],
+      statuses: Array.isArray(workspace.taxonomy.statuses) ? workspace.taxonomy.statuses : [],
+      outcomes: Array.isArray(workspace.taxonomy.outcomes) ? workspace.taxonomy.outcomes : [],
       labels:
-        config.taxonomy.labels && typeof config.taxonomy.labels === "object"
-          ? config.taxonomy.labels
+        workspace.taxonomy.labels && typeof workspace.taxonomy.labels === "object"
+          ? workspace.taxonomy.labels
           : {},
-      sections: Array.isArray(config.taxonomy.sections)
-        ? config.taxonomy.sections.map(normalizeSection).filter(Boolean)
+      sections: Array.isArray(workspace.taxonomy.sections)
+        ? workspace.taxonomy.sections.map(normalizeSection).filter(Boolean)
         : [defaultSection()],
     };
     localStorage.setItem(TAXONOMY_KEY, JSON.stringify(taxonomy));
   }
 
-  const files = await driveListChildren(driveState.recordsFolderId);
-  driveState.recordFileIds = {};
-  driveState.recordModifiedTimes = {};
-  const records = [];
+  driveState.recordModifiedTimes = Object.fromEntries(
+    Object.entries(workspace?.recordMeta || {}).map(([id, meta]) => [
+      id,
+      String(meta.modifiedTime || ""),
+    ]),
+  );
 
-  for (const file of files.filter((item) => item.name.endsWith(".json"))) {
-    const record = await driveReadJson(file.id);
-    if (!record || !record.id) continue;
-    driveState.recordFileIds[record.id] = file.id;
-    driveState.recordModifiedTimes[record.id] = file.modifiedTime || "";
-    records.push(record);
-  }
-
-  if (records.length) {
-    await replaceAllExperiments(records);
+  if (Array.isArray(workspace?.records)) {
+    await replaceAllExperiments(workspace.records);
     await loadExperiments();
-  } else if (experiments.length) {
-    await Promise.all(experiments.map((experiment) => driveSaveRecord(experiment)));
   }
 }
 
@@ -2315,44 +2124,47 @@ async function syncDriveNow() {
 }
 
 async function driveSaveConfig() {
-  if (!driveState.connected || !driveState.configFileId) return;
-  await driveUpdateJson(driveState.configFileId, {
-    app: "Definitely not Notion",
-    version: 1,
-    updatedAt: now(),
-    taxonomy,
+  if (!driveState.connected) return;
+  await backendRequest("/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taxonomy }),
   });
 }
 
 async function driveSaveRecord(experiment) {
-  if (!driveState.connected || !driveState.recordsFolderId) return;
-  const fileName = `${experiment.id}.json`;
-  const existingFile =
-    driveState.recordFileIds[experiment.id]
-      ? await driveGetMetadata(driveState.recordFileIds[experiment.id])
-      : await driveFindChild(driveState.recordsFolderId, fileName);
-  const existingId = existingFile?.id;
+  if (!driveState.connected) return;
+  const payload = {
+    record: experiment,
+    lastKnownModifiedTime: driveState.recordModifiedTimes[experiment.id] || "",
+    force: false,
+  };
 
-  if (existingId) {
-    const lastKnown = driveState.recordModifiedTimes[experiment.id];
-    if (lastKnown && existingFile.modifiedTime && existingFile.modifiedTime !== lastKnown) {
-      const overwrite = window.confirm(
-        `"${experiment.title}" changed in Google Drive since you last loaded it. Overwrite the Drive version with your current edits?`,
-      );
-      if (!overwrite) {
-        driveState.status = "Sync needed";
-        throw createDriveConflictError("Save cancelled to avoid overwriting newer Drive changes.");
-      }
+  try {
+    const saved = await backendRequest(`/records/${encodeURIComponent(experiment.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    driveState.recordModifiedTimes[experiment.id] = saved.modifiedTime || "";
+  } catch (error) {
+    if (error.status !== 409) throw error;
+    const overwrite = window.confirm(
+      `"${experiment.title}" changed in Google Drive since you last loaded it. Overwrite the Drive version with your current edits?`,
+    );
+    if (!overwrite) {
+      driveState.status = "Sync needed";
+      throw createDriveConflictError("Save cancelled to avoid overwriting newer Drive changes.");
     }
-    driveState.recordFileIds[experiment.id] = existingId;
-    const updated = await driveUpdateJson(existingId, experiment);
-    driveState.recordModifiedTimes[experiment.id] = updated.modifiedTime || "";
-    return;
-  }
 
-  const created = await driveCreateJson(driveState.recordsFolderId, fileName, experiment);
-  driveState.recordFileIds[experiment.id] = created.id;
-  driveState.recordModifiedTimes[experiment.id] = created.modifiedTime || "";
+    payload.force = true;
+    const saved = await backendRequest(`/records/${encodeURIComponent(experiment.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    driveState.recordModifiedTimes[experiment.id] = saved.modifiedTime || "";
+  }
 }
 
 async function driveDeleteRecord(id) {
@@ -2361,186 +2173,67 @@ async function driveDeleteRecord(id) {
   );
 }
 
-async function driveEnsureRecordAssetFolder(recordId) {
-  if (driveState.assetFolderIds[recordId]) return driveState.assetFolderIds[recordId];
-  const folderId = await driveEnsureFolder(driveState.assetsFolderId, recordId);
-  driveState.assetFolderIds[recordId] = folderId;
-  return folderId;
-}
-
 async function driveUploadAsset(recordId, file) {
-  const folderId = await driveEnsureRecordAssetFolder(recordId);
-  const safeName = `${Date.now()}-${file.name || "asset"}`;
-  return driveCreateBinary(folderId, safeName, file, file.type || "application/octet-stream");
+  const form = new FormData();
+  form.append("file", file, file.name || "asset");
+  return backendRequest(`/records/${encodeURIComponent(recordId)}/assets`, {
+    method: "POST",
+    body: form,
+  });
 }
 
 async function driveBlobUrl(fileId) {
-  const response = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`,
-    {
-      headers: { Authorization: `Bearer ${driveState.accessToken}` },
-    },
-  );
-  if (!response.ok) throw new Error(`Could not download Drive asset ${fileId}`);
+  const response = await backendFetch(`/assets/${encodeURIComponent(fileId)}`);
+  if (!response.ok) {
+    throw await backendError(response);
+  }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   driveState.assetObjectUrls.push(url);
   return url;
 }
 
-async function driveEnsureFolder(parentId, name) {
-  const existing = await driveFindChild(parentId, name, "application/vnd.google-apps.folder");
-  if (existing) return existing.id;
-
-  const created = await driveRequest("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name,
-      mimeType: "application/vnd.google-apps.folder",
-      parents: [parentId],
-    }),
-  });
-  return created.id;
-}
-
-async function driveFindChild(parentId, name, mimeType = "") {
-  const filters = [`'${parentId}' in parents`, `name = '${driveEscapeQuery(name)}'`, "trashed = false"];
-  if (mimeType) filters.push(`mimeType = '${driveEscapeQuery(mimeType)}'`);
-  const params = new URLSearchParams({
-    q: filters.join(" and "),
-    fields: "files(id,name,mimeType,modifiedTime)",
-    supportsAllDrives: "true",
-    includeItemsFromAllDrives: "true",
-  });
-  const result = await driveRequest(`https://www.googleapis.com/drive/v3/files?${params}`);
-  return result.files && result.files[0];
-}
-
-async function driveListChildren(parentId) {
-  const params = new URLSearchParams({
-    q: `'${parentId}' in parents and trashed = false`,
-    fields: "files(id,name,mimeType,modifiedTime)",
-    supportsAllDrives: "true",
-    includeItemsFromAllDrives: "true",
-    pageSize: "1000",
-  });
-  const result = await driveRequest(`https://www.googleapis.com/drive/v3/files?${params}`);
-  return result.files || [];
-}
-
-async function driveReadJson(fileId) {
-  return driveRequest(
-    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`,
-  );
-}
-
-async function driveGetMetadata(fileId) {
-  const params = new URLSearchParams({
-    fields: "id,name,mimeType,modifiedTime",
-    supportsAllDrives: "true",
-  });
-  return driveRequest(`https://www.googleapis.com/drive/v3/files/${fileId}?${params}`);
-}
-
-async function driveCreateJson(parentId, name, data) {
-  const boundary = `dnnotion_${Date.now()}`;
-  const metadata = JSON.stringify({
-    name,
-    mimeType: "application/json",
-    parents: [parentId],
-  });
-  const body = [
-    `--${boundary}`,
-    "Content-Type: application/json; charset=UTF-8",
-    "",
-    metadata,
-    `--${boundary}`,
-    "Content-Type: application/json; charset=UTF-8",
-    "",
-    JSON.stringify(data, null, 2),
-    `--${boundary}--`,
-    "",
-  ].join("\r\n");
-
-  return driveRequest(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,modifiedTime",
-    {
-      method: "POST",
-      headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
-      body,
-    },
-  );
-}
-
-async function driveCreateBinary(parentId, name, file, mimeType) {
-  const metadata = {
-    name,
-    mimeType,
-    parents: [parentId],
-  };
-  const form = new FormData();
-  form.append(
-    "metadata",
-    new Blob([JSON.stringify(metadata)], { type: "application/json" }),
-  );
-  form.append("file", file, name);
-
-  return driveRequest(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true",
-    {
-      method: "POST",
-      body: form,
-    },
-  );
-}
-
-async function driveUpdateJson(fileId, data) {
-  const params = new URLSearchParams({
-    uploadType: "media",
-    supportsAllDrives: "true",
-    fields: "id,name,mimeType,modifiedTime",
-  });
-  return driveRequest(
-    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?${params}`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data, null, 2),
-    },
-  );
-}
-
-async function driveRequest(url, options = {}) {
-  const headers = {
-    ...(options.headers || {}),
-    Authorization: `Bearer ${driveState.accessToken}`,
-  };
-  const response = await fetch(url, { ...options, headers });
-
-  if (response.status === 401 || response.status === 403) {
-    throw new Error("Google Drive authorization expired or folder access was denied.");
-  }
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Google Drive request failed with ${response.status}`);
-  }
+async function backendRequest(path, options = {}) {
+  const response = await backendFetch(path, options);
+  if (!response.ok) throw await backendError(response);
   if (response.status === 204) return null;
-
-  const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return response.json();
-  return response.text();
+  return response.json();
 }
 
-function driveEscapeQuery(value) {
-  return String(value).replaceAll("\\", "\\\\").replaceAll("'", "\\'");
+async function backendFetch(path, options = {}) {
+  if (!driveSettings.backendUrl) throw new Error("Cloud Run backend URL is not configured.");
+  return fetch(`${driveSettings.backendUrl}${path}`, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${driveState.accessToken}`,
+    },
+  });
+}
+
+async function backendError(response) {
+  let message = `Notebook backend request failed with ${response.status}`;
+  try {
+    const body = await response.json();
+    if (body && body.error) message = body.error;
+  } catch {
+    const text = await response.text().catch(() => "");
+    if (text) message = text;
+  }
+
+  const error = new Error(message);
+  error.status = response.status;
+  return error;
 }
 
 function handleDriveError(error) {
   console.error(error);
+  if (error.status === 401) {
+    localStorage.removeItem(BACKEND_CREDENTIAL_KEY);
+  }
   driveState.connected = false;
   driveState.accessToken = "";
-  driveState.status = "Drive error";
+  driveState.status = "Backend error";
   window.alert(error.message || String(error));
 }
 
@@ -2771,6 +2464,7 @@ async function init() {
   await seedIfEmpty();
   await loadExperiments();
   window.addEventListener("hashchange", route);
+  await tryAutoConnectBackend();
   await route();
 }
 

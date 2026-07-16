@@ -75,29 +75,32 @@
         IndexedDB storage on your device.
       </p>
       <p>
-        In Google Drive mode, notebook configuration, record JSON files, images, and videos are
-        stored in the shared Google Drive folder configured for the notebook. The app is designed
-        to read and write the notebook files in the folder that the user explicitly selects with
-        Google Picker.
+        In hosted Google Drive mode, notebook configuration, record JSON files, images, and videos
+        are stored in the shared Google Drive folder configured for the notebook. The app sends
+        notebook changes to a Cloud Run backend, and the backend reads and writes the notebook
+        files in that folder.
       </p>
 
       <h2>Google sign-in and Drive access</h2>
       <p>
-        When you connect Google Drive, the app requests a Google access token in your browser so it
-        can use the Google Drive API with the limited drive.file scope. The app uses Google Picker
-        so you explicitly choose the shared notebook folder. The token is kept in browser memory
-        for the current session and is not sent to any separate backend service.
+        When you connect to the hosted notebook, the app requests a Google sign-in ID token in your
+        browser. The app sends that token to the Cloud Run backend so the backend can verify your
+        Google account and check whether your email is allowed. The short-lived ID token may be
+        kept in browser storage until it expires so refreshes can reconnect smoothly. The browser
+        does not receive Google Drive API credentials.
       </p>
 
       <h2>Who can see notebook data</h2>
       <p>
-        People who can access the configured Google Drive folder can see the notebook files stored
-        there. Manage notebook membership by changing sharing permissions on that Drive folder.
+        People allowed by the backend can use the app. People who can access the configured Google
+        Drive folder can see the raw notebook files stored there. Manage app membership through the
+        backend allowlist and raw file access through Drive folder sharing.
       </p>
 
       <h2>How to remove access or data</h2>
       <ul>
-        <li>Remove a person from the shared Google Drive folder to revoke notebook data access.</li>
+        <li>Remove a person from the backend allowlist to revoke app access.</li>
+        <li>Remove a person from the shared Google Drive folder to revoke raw notebook file access.</li>
         <li>Delete the notebook files from Drive to remove shared notebook data.</li>
         <li>
           Revoke the app's Google access from your Google Account security settings if you no

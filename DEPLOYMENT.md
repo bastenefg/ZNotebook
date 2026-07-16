@@ -1,109 +1,127 @@
 # Deployment
 
-This app is designed so one person sets up the hosted URL and shared Google Drive folder. Everyone else opens the URL, clicks `Connect Drive`, signs in with Google, selects the shared folder in Google Picker, and uses the shared notebook.
+This app uses GitHub Pages for the public frontend and Google Cloud Run for a small private backend. The backend owns Drive access through a Google Cloud service account, so no Drive API key or Drive OAuth scope is exposed in the browser.
 
-## Recommended low-cost hosting
+## Architecture
 
-Use GitHub Pages for the app files. It hosts static HTML, CSS, and JavaScript from a GitHub repository, which is enough for this app. See GitHub's overview: https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages
+```text
+GitHub Pages frontend
+  -> Cloud Run backend
+  -> private/shared Google Drive folder
+```
 
-The Google Drive folder stores notebook data. Hosting only serves the app shell.
-
-For a GitHub Pages walkthrough, see `GITHUB_PAGES.md`.
+Users sign in with Google in the browser. The browser sends a Google ID token to the backend. The backend verifies the token, checks the allowlist, and then reads/writes notebook files in the configured Drive folder using the Cloud Run service account.
 
 ## Google Drive setup
 
-1. Create a Google Drive folder for the notebook, for example `Lab Notebook`.
-2. Share the folder with the lab members or a Google Group.
-3. Copy the folder ID from the URL:
+1. Create or reuse the shared ZNotebook Drive folder.
+2. Share the folder with lab members as needed.
+3. Share the same folder with the backend service account as **Editor**:
 
-   ```text
-   https://drive.google.com/drive/folders/FOLDER_ID_IS_HERE
-   ```
+```text
+znotebook-backend@labnotebook-502503.iam.gserviceaccount.com
+```
 
-The app will create these files inside that folder:
+The backend creates and uses this structure:
 
 ```text
 Lab Notebook/
   definitely-not-notion.config.json
   records/
-    rec_abc123.json
-    rec_def456.json
+    record-id.json
   assets/
-    rec_abc123/
+    record-id/
       image.png
       video.mp4
 ```
 
-## Google OAuth setup
+Record deletion is soft: records are marked with `deletedAt` and hidden by default, but the JSON files remain in Drive.
 
-1. Go to Google Cloud Console.
-2. Create a project, for example `Definitely not Notion`.
-3. Enable the Google Drive API and Google Picker API.
-4. Configure the OAuth consent screen.
-5. Create an OAuth Client ID.
-6. Choose `Web application`.
-7. Add the hosted app origin as an authorized JavaScript origin.
-8. Copy the Client ID.
-9. Create an API key for Google Picker.
-10. Restrict the API key to the Google Picker API.
-11. Restrict the API key to your hosted website referrer, for example `https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPOSITORY/*`.
-12. Do not bind the API key to a service account.
-13. Copy the Google Cloud project number.
+## Google Cloud setup
 
-For GitHub Pages, the authorized JavaScript origin should be only:
+Use Google Cloud Shell or a local Google Cloud SDK install.
 
-```text
-https://YOUR_GITHUB_USERNAME.github.io
+```powershell
+gcloud auth login
+gcloud config set project labnotebook-502503
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com drive.googleapis.com iam.googleapis.com
 ```
 
-Do not include the repository path in the origin.
+Create the backend service account if it does not already exist:
 
-If the OAuth consent screen asks for app URLs, use the full hosted app URL as the application home page and `https://YOUR_HOSTED_APP_URL/privacy.html` as the privacy policy URL. The repository also includes `PRIVACY.md` with the same content for review.
+```powershell
+gcloud iam service-accounts create znotebook-backend --display-name="ZNotebook backend"
+```
 
-If your lab uses Google Workspace, set the OAuth app to `Internal` if available. If you use personal Gmail accounts or external collaborators, use test users during early testing or prepare for Google app verification.
+## OAuth setup
 
-References:
+Create or reuse a Google OAuth Client ID for web sign-in.
 
-- Google Identity token model: https://developers.google.com/identity/oauth2/web/guides/use-token-model
-- Google Drive API scopes: https://developers.google.com/workspace/drive/api/guides/api-specific-auth
-- Google Drive uploads: https://developers.google.com/workspace/drive/api/guides/manage-uploads
+Authorized JavaScript origins:
 
-## App setup
+```text
+https://bastenefg.github.io
+http://localhost:8000
+http://localhost:5173
+```
 
-Before hosting, edit `config.js`:
+Do not add the `/ZNotebook/` path to JavaScript origins. Google expects origins only.
+
+The current client ID is:
+
+```text
+417347365496-bemjg51elajma1jevfjsjl1gccbmp9ge.apps.googleusercontent.com
+```
+
+## Deploy backend
+
+From the repository root, deploy the backend:
+
+```powershell
+gcloud run deploy znotebook-api `
+  --source ./backend `
+  --project labnotebook-502503 `
+  --region us-central1 `
+  --service-account znotebook-backend@labnotebook-502503.iam.gserviceaccount.com `
+  --allow-unauthenticated `
+  --set-env-vars "^~^GOOGLE_CLIENT_ID=417347365496-bemjg51elajma1jevfjsjl1gccbmp9ge.apps.googleusercontent.com~DRIVE_FOLDER_ID=1WrlJN8VoKLzeyGiXb9InPKDm7t6kFi13~ALLOWED_EMAILS=baymon@mit.edu,alevalde@mit.edu,sharifla@mit.edu,majacquem@gmail.com~CORS_ORIGIN=https://bastenefg.github.io"
+```
+
+`--allow-unauthenticated` is expected. Browsers must be able to reach the service, but the backend rejects requests unless they include a valid Google ID token from an allowed user.
+
+After deployment, get the service URL:
+
+```powershell
+gcloud run services describe znotebook-api --project labnotebook-502503 --region us-central1 --format="value(status.url)"
+```
+
+## Configure frontend
+
+Put the Cloud Run URL in `config.js`:
 
 ```js
 window.DEFINITELY_NOT_NOTION_CONFIG = {
-  googleClientId: "YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com",
-  googleDriveFolderId: "YOUR_SHARED_DRIVE_FOLDER_ID",
-  googleApiKey: "YOUR_RESTRICTED_GOOGLE_PICKER_API_KEY",
-  googleAppId: "YOUR_GOOGLE_CLOUD_PROJECT_NUMBER",
+  googleClientId: "417347365496-bemjg51elajma1jevfjsjl1gccbmp9ge.apps.googleusercontent.com",
+  backendUrl: "https://YOUR_CLOUD_RUN_URL",
 };
 ```
 
-Then deploy the folder. Lab members only need to:
+Then commit and push to GitHub Pages.
 
-1. Open the hosted app URL.
+## Test
+
+1. Open `https://bastenefg.github.io/ZNotebook/`.
 2. Click `Connect Drive`.
-3. Sign in with Google.
-4. Select the shared notebook folder in Google Picker.
-
-After that, records are saved as JSON files in the shared Drive folder. Local IndexedDB remains a cache/fallback.
-
-For local testing, you can also leave `config.js` blank and paste the Client ID, folder ID, restricted Picker API key, and project number in the `Connect Drive` dialog.
-
-For a practical rollout sequence, follow `SETUP_CHECKLIST.md`.
+3. Sign in with one allowed Google account.
+4. Confirm records load.
+5. Create a test record.
+6. Refresh and reconnect.
+7. Confirm the record persists.
+8. Test with an account that is not on the allowlist; it should be rejected.
 
 ## Notes
 
-- This first Drive version uses Google Drive as a shared file store, not a database.
-- GitHub Pages can be public because it serves only the app shell. Records, note contents, images, and videos remain in the shared Drive folder.
-- The app requests the narrower `https://www.googleapis.com/auth/drive.file` scope and uses Google Picker so each user explicitly selects the shared folder.
-- The public `config.js` contains identifiers and a restricted browser API key, not an OAuth client secret. Keep the API key restricted to Google Picker and your hosted referrers, and keep the Drive folder itself restricted to the team.
-- If you tested an older version that requested full Drive access, revoke the old app grant in your Google Account security settings and reconnect so the narrower permission is used.
-- Each record is saved as a separate JSON file to reduce accidental overwrites.
-- Record deletion is soft: deleted records are hidden in the app but kept in Drive with a `deletedAt` timestamp. Use `Show deleted records` and `Restore` in the app to recover them.
-- Use `Sync now` to pull the latest records from Drive while the app is open.
-- If two people edit the same record at the same time, the app checks Drive's modified timestamp before saving and asks before overwriting a newer Drive version.
-- Images and videos are uploaded to an `assets/` folder in Drive when Drive mode is connected. Local-only mode still embeds media in browser storage.
-- The `Backup` button exports/imports local JSON snapshots. In Drive mode, backup files include Drive media references, not copies of the binary media files.
+- The browser no longer receives a Drive API key or Drive OAuth access token.
+- The backend service account can only access Drive content that is shared with that service account.
+- To add or remove app users, update `ALLOWED_EMAILS` and redeploy Cloud Run.
+- To add or remove Drive-level access, update the shared folder permissions.

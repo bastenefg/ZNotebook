@@ -1,59 +1,75 @@
 # Setup Checklist
 
-Use this as the practical rollout checklist for a shared lab notebook.
+Use this as the practical rollout checklist for the hosted shared lab notebook.
 
-## 1. Create the shared Drive folder
+## 1. Drive folder
 
-- Create a Google Drive folder, for example `Lab Notebook`.
-- Share it with the lab members or a Google Group.
-- Copy the folder ID from the folder URL.
+- Create or reuse the shared ZNotebook Drive folder.
+- Share it with lab members as needed.
+- Share it with `znotebook-backend@labnotebook-502503.iam.gserviceaccount.com` as **Editor**.
+- Keep the folder private to the team.
 
-## 2. Create the Google OAuth app
+## 2. Google Cloud
 
-- Create a Google Cloud project.
-- Enable the Google Drive API and Google Picker API.
-- Configure the OAuth consent screen.
-- Use `Internal` if your lab has Google Workspace and everyone is in the same organization.
-- Use `External` with test users for early testing if collaborators use personal or outside Google accounts.
-- Use the hosted app URL as the application home page.
-- Use `https://YOUR_HOSTED_APP_URL/privacy.html` as the privacy policy URL.
-- Create a `Web application` OAuth Client ID.
-- Add the app origin as an authorized JavaScript origin, for example `https://YOUR_GITHUB_USERNAME.github.io`. Do not include the repository path.
-- Create a Google Picker API key.
-- Restrict the key to the Google Picker API only.
-- Restrict the key to the hosted website referrer, for example `https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPOSITORY/*`.
-- Leave service account binding off.
+- Use project `labnotebook-502503`.
+- Enable Cloud Run, Cloud Build, Artifact Registry, Drive API, and IAM APIs.
+- Create the `znotebook-backend` service account if needed.
+- Do not download a service-account key.
 
-## 3. Configure the app
+## 3. OAuth
 
-Edit `config.js`:
+- Use the web OAuth Client ID:
+
+```text
+417347365496-bemjg51elajma1jevfjsjl1gccbmp9ge.apps.googleusercontent.com
+```
+
+- Add authorized JavaScript origins:
+
+```text
+https://bastenefg.github.io
+http://localhost:8000
+http://localhost:5173
+```
+
+## 4. Backend deploy
+
+Deploy `backend/` to Cloud Run with:
+
+```powershell
+gcloud run deploy znotebook-api `
+  --source ./backend `
+  --project labnotebook-502503 `
+  --region us-central1 `
+  --service-account znotebook-backend@labnotebook-502503.iam.gserviceaccount.com `
+  --allow-unauthenticated `
+  --set-env-vars "^~^GOOGLE_CLIENT_ID=417347365496-bemjg51elajma1jevfjsjl1gccbmp9ge.apps.googleusercontent.com~DRIVE_FOLDER_ID=1WrlJN8VoKLzeyGiXb9InPKDm7t6kFi13~ALLOWED_EMAILS=baymon@mit.edu,alevalde@mit.edu,sharifla@mit.edu,majacquem@gmail.com~CORS_ORIGIN=https://bastenefg.github.io"
+```
+
+## 5. Frontend config
+
+Update `config.js` after Cloud Run returns a URL:
 
 ```js
 window.DEFINITELY_NOT_NOTION_CONFIG = {
-  googleClientId: "YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com",
-  googleDriveFolderId: "YOUR_SHARED_DRIVE_FOLDER_ID",
-  googleApiKey: "YOUR_RESTRICTED_GOOGLE_PICKER_API_KEY",
-  googleAppId: "YOUR_GOOGLE_CLOUD_PROJECT_NUMBER",
+  googleClientId: "417347365496-bemjg51elajma1jevfjsjl1gccbmp9ge.apps.googleusercontent.com",
+  backendUrl: "https://YOUR_CLOUD_RUN_URL",
 };
 ```
 
-## 4. Host the files
+## 6. Test before rollout
 
-- Put the files in a public GitHub repository.
-- Enable GitHub Pages for the repository from the `main` branch and `/ (root)` folder.
-- Open the hosted URL and confirm the app loads.
+- Open the hosted app.
+- Click `Connect Drive`.
+- Sign in with an allowed account.
+- Create a test record.
+- Upload one image or video.
+- Refresh and reconnect.
+- Confirm `definitely-not-notion.config.json`, `records/`, and `assets/` exist in Drive.
+- Test one non-allowed account and confirm it is rejected.
 
-## 5. Test before rollout
-
-- Connect Drive with your own Google account and select the shared folder in Google Picker.
-- Create a test section and record.
-- Upload one image or video in a record.
-- Open the Drive folder and confirm `definitely-not-notion.config.json`, `records/`, and `assets/` were created.
-- Test with a second Google account that has access to the folder.
-- Use `Sync now` from both browsers to confirm shared records load.
-
-## 6. Roll out to the team
+## 7. Roll out
 
 - Share the hosted app URL.
-- Tell people they only need the URL and access to the shared Drive folder; the first connection asks them to choose that folder in Google Picker.
-- Manage future access from the Drive folder sharing settings.
+- Manage app access through `ALLOWED_EMAILS` on Cloud Run.
+- Manage raw Drive folder access through Google Drive sharing.
