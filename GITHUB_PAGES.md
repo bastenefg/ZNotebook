@@ -2,7 +2,7 @@
 
 This app is safe to host as a public static site because the site only serves the app shell. Notebook records, note contents, images, and videos are stored in Google Drive through the Cloud Run backend.
 
-Public files include `config.js`, which contains the Google OAuth Client ID and Cloud Run backend URL. These values are public identifiers, not secrets. Drive access happens on the backend through the Cloud Run service account.
+Public files include `config.js`, which contains the Google OAuth Client ID and Cloud Run backend URL. These values are public identifiers, not secrets. Drive access happens on the backend through private Cloud Run environment variables.
 
 Record deletion is soft. The app hides deleted records by default, but the record JSON files remain in Google Drive with a `deletedAt` timestamp and can be restored from the app.
 

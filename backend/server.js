@@ -13,6 +13,9 @@ const GOOGLE_CLIENT_ID = requiredEnv("GOOGLE_CLIENT_ID");
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "https://bastenefg.github.io";
 const ALLOWED_EMAILS = parseList(process.env.ALLOWED_EMAILS).map((email) => email.toLowerCase());
 const ALLOWED_DOMAIN = (process.env.ALLOWED_DOMAIN || "").trim().toLowerCase();
+const DRIVE_OWNER_CLIENT_ID = process.env.DRIVE_OWNER_CLIENT_ID || "";
+const DRIVE_OWNER_CLIENT_SECRET = process.env.DRIVE_OWNER_CLIENT_SECRET || "";
+const DRIVE_OWNER_REFRESH_TOKEN = process.env.DRIVE_OWNER_REFRESH_TOKEN || "";
 
 const DRIVE_CONFIG_NAME = "definitely-not-notion.config.json";
 const DRIVE_RECORDS_FOLDER_NAME = "records";
@@ -20,7 +23,12 @@ const DRIVE_ASSETS_FOLDER_NAME = "assets";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 
-const googleAuth = new GoogleAuth({ scopes: [DRIVE_SCOPE] });
+const driveAuthMode = driveOwnerOAuthConfigured() ? "storage-owner-oauth" : "service-account";
+const googleAuth = driveAuthMode === "service-account" ? new GoogleAuth({ scopes: [DRIVE_SCOPE] }) : null;
+const driveOwnerClient =
+  driveAuthMode === "storage-owner-oauth"
+    ? createDriveOwnerClient()
+    : null;
 const tokenVerifier = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 let workspaceCache = null;
@@ -32,7 +40,7 @@ app.use(corsHeaders);
 app.options("*", (req, res) => res.status(204).end());
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true, app: "znotebook-api" });
+  res.json({ ok: true, app: "znotebook-api", driveAuthMode });
 });
 
 app.use(requireAllowedUser);
@@ -441,9 +449,7 @@ async function driveRequest(url, options = {}) {
 }
 
 async function driveFetch(url, options = {}) {
-  const client = await googleAuth.getClient();
-  const accessToken = await client.getAccessToken();
-  const token = typeof accessToken === "string" ? accessToken : accessToken.token;
+  const token = await getDriveAccessToken();
   return fetch(url, {
     ...options,
     headers: {
@@ -451,6 +457,32 @@ async function driveFetch(url, options = {}) {
       Authorization: `Bearer ${token}`,
     },
   });
+}
+
+async function getDriveAccessToken() {
+  const client =
+    driveAuthMode === "storage-owner-oauth"
+      ? driveOwnerClient
+      : await googleAuth.getClient();
+  const accessToken = await client.getAccessToken();
+  return typeof accessToken === "string" ? accessToken : accessToken.token;
+}
+
+function driveOwnerOAuthConfigured() {
+  const values = [DRIVE_OWNER_CLIENT_ID, DRIVE_OWNER_CLIENT_SECRET, DRIVE_OWNER_REFRESH_TOKEN];
+  const provided = values.filter(Boolean).length;
+  if (provided > 0 && provided < values.length) {
+    throw new Error(
+      "Set DRIVE_OWNER_CLIENT_ID, DRIVE_OWNER_CLIENT_SECRET, and DRIVE_OWNER_REFRESH_TOKEN together.",
+    );
+  }
+  return provided === values.length;
+}
+
+function createDriveOwnerClient() {
+  const client = new OAuth2Client(DRIVE_OWNER_CLIENT_ID, DRIVE_OWNER_CLIENT_SECRET);
+  client.setCredentials({ refresh_token: DRIVE_OWNER_REFRESH_TOKEN });
+  return client;
 }
 
 async function driveError(response) {
