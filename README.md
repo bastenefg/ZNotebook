@@ -24,6 +24,8 @@ Built-in field names can be renamed through `Edit labels`. New sections can be c
 
 The app can now run locally or connect to a shared Google Drive folder through a small Cloud Run backend. In hosted mode, the browser signs users in with Google, the backend checks the allowed-user list, and the backend writes sections, columns, records, images, and videos into the shared Drive folder.
 
+For day-to-day instructions, see `USER_GUIDE.md`. For admin operations such as adding authorized emails, rotating Drive tokens, and redeploying Cloud Run, see `ADMIN_GUIDE.md`.
+
 For setup instructions, see `DEPLOYMENT.md`. For the exact GitHub Pages steps, see `GITHUB_PAGES.md`.
 
 For a hosted shared notebook, put the Google OAuth Client ID and Cloud Run backend URL in `config.js` before deployment. Then lab members only need to open the app URL, click `Connect Drive`, and sign in with an allowed Google account.
