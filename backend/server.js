@@ -167,7 +167,7 @@ app.use((error, req, res, next) => {
   }
 
   const status = error.status || 500;
-  const message = status >= 500 ? "Notebook backend error." : error.message;
+  const message = status >= 500 && !error.expose ? "Notebook backend error." : error.message;
   if (status >= 500) console.error(error);
   res.status(status).json({ error: message });
 });
@@ -460,12 +460,38 @@ async function driveFetch(url, options = {}) {
 }
 
 async function getDriveAccessToken() {
-  const client =
-    driveAuthMode === "storage-owner-oauth"
-      ? driveOwnerClient
-      : await googleAuth.getClient();
-  const accessToken = await client.getAccessToken();
-  return typeof accessToken === "string" ? accessToken : accessToken.token;
+  try {
+    const client =
+      driveAuthMode === "storage-owner-oauth"
+        ? driveOwnerClient
+        : await googleAuth.getClient();
+    const accessToken = await client.getAccessToken();
+    return typeof accessToken === "string" ? accessToken : accessToken.token;
+  } catch (error) {
+    throw normalizeDriveAuthError(error);
+  }
+}
+
+function normalizeDriveAuthError(error) {
+  const raw = [
+    error?.message,
+    error?.response?.data?.error,
+    error?.response?.data?.error_description,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (raw.includes("invalid_grant")) {
+    const friendly = new Error(
+      "Drive owner authorization expired or was revoked. Regenerate DRIVE_OWNER_REFRESH_TOKEN and redeploy Cloud Run. If the OAuth app is still in Testing, set its publishing status to In production first.",
+    );
+    friendly.status = 503;
+    friendly.expose = true;
+    friendly.cause = error;
+    return friendly;
+  }
+
+  return error;
 }
 
 function driveOwnerOAuthConfigured() {

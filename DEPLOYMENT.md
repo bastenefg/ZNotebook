@@ -94,6 +94,8 @@ http://localhost:8090/oauth2callback
 
 Copy that client ID and client secret. Do not commit them.
 
+Before generating the refresh token, go to the OAuth consent screen and check **Publishing status**. If it is `Testing`, storage-owner refresh tokens can expire after 7 days. For the hosted notebook, switch the app to **In production** before creating the long-lived storage-owner token.
+
 From the repository root:
 
 ```powershell

@@ -45,6 +45,7 @@ http://localhost:5173
 http://localhost:8090/oauth2callback
 ```
 
+- On the OAuth consent screen, set **Publishing status** to **In production** before generating the storage-owner refresh token. Tokens created while the app is in Testing can expire after 7 days.
 - From the repository root:
 
 ```powershell
