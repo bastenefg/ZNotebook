@@ -184,6 +184,8 @@ assets/
 
 The app uses soft deletion. When a user deletes a record, the record JSON remains in Drive and gets a `deletedAt` timestamp. Users can restore it from `Show deleted records`.
 
+Deleting a section follows the same policy. The section remains in `definitely-not-notion.config.json` with a `deletedAt` timestamp, and every record assigned to that section remains unchanged in `records/`. Users can recover the section and its records from `Show deleted sections`.
+
 Hard deletion from the app is intentionally disabled for Drive records. However, someone with direct raw Drive access could still delete files manually from Google Drive. Limit raw Drive folder access to admins or trusted storage maintainers.
 
 For extra protection:

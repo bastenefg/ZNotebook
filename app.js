@@ -72,6 +72,9 @@ const ICONS = {
   upload: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M5 3h14"/></svg>`,
   print: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/><path d="M18 12h.01"/></svg>`,
   chevron: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`,
+  pencil: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>`,
+  trash: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>`,
+  restore: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`,
   bold: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h7a4 4 0 0 1 0 8H7z"/><path d="M7 13h8a4 4 0 0 1 0 8H7z"/></svg>`,
   italic: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5h8M6 19h8M14 5l-4 14"/></svg>`,
   underline: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v6a5 5 0 0 0 10 0V5"/><path d="M5 21h14"/></svg>`,
@@ -93,7 +96,7 @@ let db;
 let experiments = [];
 let activeExperiment = null;
 let saveTimer = null;
-let currentFilters = { search: "", showDeleted: false };
+let currentFilters = { search: "", showDeleted: false, showDeletedSections: false };
 let taxonomy = loadTaxonomy();
 let driveSettings = loadDriveSettings();
 let driveState = {
@@ -181,7 +184,7 @@ function normalizeSection(section) {
   if (!section || !section.name) return null;
   const seen = new Set();
   const columns = Array.isArray(section.columns) ? section.columns : [];
-  return {
+  const normalized = {
     id: section.id || `section-${slugifyOption(section.name)}`,
     name: String(section.name).trim(),
     columns: columns
@@ -193,6 +196,8 @@ function normalizeSection(section) {
         return true;
       }),
   };
+  if (section.deletedAt) normalized.deletedAt = String(section.deletedAt);
+  return normalized;
 }
 
 function loadDriveSettings() {
@@ -307,6 +312,16 @@ function sections() {
     taxonomy.sections = [defaultSection()];
   }
   return taxonomy.sections;
+}
+
+function isDeletedSection(section) {
+  return Boolean(section && section.deletedAt);
+}
+
+function visibleSections() {
+  return sections().filter(
+    (section) => currentFilters.showDeletedSections || !isDeletedSection(section),
+  );
 }
 
 function sectionById(sectionId) {
@@ -753,6 +768,7 @@ function resetDriveState(status = "Local only") {
 
 function renderListPage() {
   activeExperiment = null;
+  const hasDeletedSections = sections().some(isDeletedSection);
   renderShell(`
     <main class="page">
       <section class="page-header">
@@ -778,10 +794,20 @@ function renderListPage() {
           } />
           <span>Show deleted records</span>
         </label>
+        ${
+          hasDeletedSections
+            ? `<label class="filter-toggle">
+                <input type="checkbox" data-filter="show-deleted-sections" ${
+                  currentFilters.showDeletedSections ? "checked" : ""
+                } />
+                <span>Show deleted sections</span>
+              </label>`
+            : ""
+        }
       </section>
 
       <div class="sections-stack">
-        ${sections().map((section) => renderSectionTable(section)).join("")}
+        ${visibleSections().map((section) => renderSectionTable(section)).join("")}
         <button class="add-section-tile" type="button" data-action="add-section">
           ${ICONS.add}
           <span>Add section</span>
@@ -797,6 +823,15 @@ function renderListPage() {
   });
   app.querySelectorAll("[data-action='add-column']").forEach((button) => {
     button.addEventListener("click", () => openColumnDialog(button.dataset.sectionId));
+  });
+  app.querySelectorAll("[data-action='rename-section']").forEach((button) => {
+    button.addEventListener("click", () => openRenameSectionDialog(button.dataset.sectionId));
+  });
+  app.querySelectorAll("[data-action='delete-section']").forEach((button) => {
+    button.addEventListener("click", () => deleteSection(button.dataset.sectionId));
+  });
+  app.querySelectorAll("[data-action='restore-section']").forEach((button) => {
+    button.addEventListener("click", () => restoreSection(button.dataset.sectionId));
   });
   app.querySelectorAll("[data-action='remove-column']").forEach((button) => {
     button.addEventListener("click", () =>
@@ -821,25 +856,56 @@ function renderListPage() {
     currentFilters.showDeleted = event.target.checked;
     renderListPage();
   });
+  app.querySelector("[data-filter='show-deleted-sections']")?.addEventListener(
+    "change",
+    (event) => {
+      currentFilters.showDeletedSections = event.target.checked;
+      renderListPage();
+    },
+  );
 }
 
 function renderSectionTable(section) {
   const rows = sectionRecords(section);
   const recordCount = `${rows.length} ${rows.length === 1 ? "record" : "records"}`;
+  const deleted = isDeletedSection(section);
   return `
-    <section class="section-block">
+    <section class="section-block ${deleted ? "deleted-section" : ""}">
       <div class="section-heading">
-        <div>
-          <h2>${escapeHtml(section.name)}</h2>
-          <span class="save-state">${recordCount}</span>
+        <div class="section-title-group">
+          <div class="section-title-row">
+            <h2>${escapeHtml(section.name)}</h2>
+            ${deleted ? `<span class="deleted-badge">Deleted</span>` : ""}
+            ${
+              deleted
+                ? ""
+                : `<div class="section-title-tools" aria-label="Section actions">
+                    <button class="icon-btn compact" type="button" title="Rename section" aria-label="Rename ${escapeHtml(
+                      section.name,
+                    )}" data-action="rename-section" data-section-id="${escapeHtml(section.id)}">${ICONS.pencil}</button>
+                    <button class="icon-btn compact danger-ghost" type="button" title="Delete section" aria-label="Delete ${escapeHtml(
+                      section.name,
+                    )}" data-action="delete-section" data-section-id="${escapeHtml(section.id)}">${ICONS.trash}</button>
+                  </div>`
+            }
+          </div>
+          <span class="save-state">${recordCount}${
+            deleted ? ` · Deleted ${escapeHtml(formatDateTime(section.deletedAt))}` : ""
+          }</span>
         </div>
         <div class="section-actions">
-          <button class="btn ghost" type="button" data-action="add-column" data-section-id="${escapeHtml(
-            section.id,
-          )}">${ICONS.add} Add column</button>
-          <button class="btn primary" type="button" data-action="new-record" data-section-id="${escapeHtml(
-            section.id,
-          )}">${ICONS.add} New</button>
+          ${
+            deleted
+              ? `<button class="btn primary" type="button" data-action="restore-section" data-section-id="${escapeHtml(
+                  section.id,
+                )}">${ICONS.restore} Restore section</button>`
+              : `<button class="btn ghost" type="button" data-action="add-column" data-section-id="${escapeHtml(
+                  section.id,
+                )}">${ICONS.add} Add column</button>
+                 <button class="btn primary" type="button" data-action="new-record" data-section-id="${escapeHtml(
+                   section.id,
+                 )}">${ICONS.add} New</button>`
+          }
         </div>
       </div>
 
@@ -856,9 +922,11 @@ function renderSectionTable(section) {
                 ${
                   currentFilters.search
                     ? ""
-                    : `<button class="btn primary" type="button" data-action="new-record" data-section-id="${escapeHtml(
-                        section.id,
-                      )}">${ICONS.add} New</button>`
+                    : deleted
+                      ? ""
+                      : `<button class="btn primary" type="button" data-action="new-record" data-section-id="${escapeHtml(
+                          section.id,
+                        )}">${ICONS.add} New</button>`
                 }
               </div>`
         }
@@ -1626,6 +1694,89 @@ function syncBuiltinColumnLabels() {
       return { ...column, label: term(column.field) };
     });
   });
+}
+
+function openRenameSectionDialog(sectionId) {
+  const section = sections().find((item) => item.id === sectionId);
+  if (!section || isDeletedSection(section)) return;
+
+  const dialog = document.createElement("div");
+  dialog.className = "dialog-backdrop";
+  dialog.innerHTML = `
+    <form class="panel dialog" data-rename-section-form>
+      <h2>Rename section</h2>
+      <div class="field-group">
+        <label class="field-label" for="renameSectionName">Section name</label>
+        <input id="renameSectionName" class="field" name="name" required value="${escapeHtml(
+          section.name,
+        )}" />
+      </div>
+      <div class="dialog-actions">
+        <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  `;
+
+  document.body.appendChild(dialog);
+  const form = dialog.querySelector("[data-rename-section-form]");
+  const nameInput = dialog.querySelector("#renameSectionName");
+  nameInput.focus();
+  nameInput.select();
+  nameInput.addEventListener("input", () => nameInput.setCustomValidity(""));
+  wireDialogClose(dialog);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = String(new FormData(form).get("name") || "")
+      .trim()
+      .replace(/\s+/g, " ");
+    if (!name) return;
+
+    const duplicate = sections().some(
+      (item) =>
+        item.id !== section.id &&
+        !isDeletedSection(item) &&
+        item.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (duplicate) {
+      nameInput.setCustomValidity("An active section already uses this name.");
+      nameInput.reportValidity();
+      return;
+    }
+
+    nameInput.setCustomValidity("");
+    section.name = name;
+    saveTaxonomy();
+    dialog.remove();
+    await route();
+  });
+}
+
+async function deleteSection(sectionId) {
+  const section = sections().find((item) => item.id === sectionId);
+  if (!section || isDeletedSection(section)) return;
+
+  const count = experiments.filter((experiment) => experiment.sectionId === section.id).length;
+  const recordsLabel = `${count} ${count === 1 ? "record" : "records"}`;
+  const confirmed = window.confirm(
+    `Delete the "${section.name}" section and hide its ${recordsLabel}? Nothing will be permanently deleted. You can recover it with "Show deleted sections".`,
+  );
+  if (!confirmed) return;
+
+  section.deletedAt = now();
+  saveTaxonomy();
+  await route();
+}
+
+async function restoreSection(sectionId) {
+  const section = sections().find((item) => item.id === sectionId);
+  if (!section || !isDeletedSection(section)) return;
+
+  delete section.deletedAt;
+  if (!sections().some(isDeletedSection)) currentFilters.showDeletedSections = false;
+  saveTaxonomy();
+  await route();
 }
 
 function openSectionDialog() {

@@ -18,7 +18,7 @@ Open `index.html` in a browser. The app stores records in browser IndexedDB, inc
 - `customFields`: user-defined columns such as owner, project, batch, instrument, strain, or priority
 - `content`: rich HTML note body
 
-Built-in field names can be renamed through `Edit labels`. New sections can be created with `Add section`, and each section can choose its starting columns. Columns can be added from the section header and removed from the table header hover control.
+Built-in field names can be renamed through `Edit labels`. New sections can be created with `Add section`, and each section can choose its starting columns. Section titles can be renamed from their header controls. Columns can be added from the section header and removed from the table header hover control.
 
 ## Hosting path
 
@@ -37,6 +37,8 @@ The `Backup` button exports/imports a JSON snapshot for local fallback or manual
 Individual records have an `Export` button that opens a simple report view and the browser print dialog, which can be saved as PDF.
 
 Record deletion is intentionally soft. Deleted records disappear from normal tables but remain stored as JSON in Drive with a `deletedAt` timestamp. Use `Show deleted records` and `Restore` to recover them.
+
+Section deletion is also soft. A deleted section remains in the shared configuration with a `deletedAt` timestamp, and its record files are left untouched. Use `Show deleted sections` and `Restore section` to recover it.
 
 The repository can be public when hosted on GitHub Pages. The public app shell exposes only the Google Client ID and backend URL. Notebook data and media remain in the shared Google Drive folder behind the Cloud Run backend.
 

@@ -329,6 +329,17 @@ h1 {
   color: var(--accent-strong);
 }
 
+.icon-btn.danger-ghost {
+  color: var(--danger);
+}
+
+.icon-btn.danger-ghost:hover,
+.icon-btn.danger-ghost:focus-visible {
+  border-color: #e4b2ae;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .icon-btn:active {
   transform: translateY(1px);
 }
@@ -458,6 +469,41 @@ h1 {
   margin: 0;
   font-size: 21px;
   line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.section-title-group {
+  min-width: 0;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.section-title-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.78;
+  transition: opacity 120ms ease;
+}
+
+.section-heading:hover .section-title-tools,
+.section-title-tools:focus-within {
+  opacity: 1;
+}
+
+.deleted-section .section-heading h2 {
+  color: var(--muted);
+}
+
+.deleted-section .experiments-table-wrap {
+  border-color: #e4b2ae;
+  background: #fffafa;
 }
 
 .section-actions {

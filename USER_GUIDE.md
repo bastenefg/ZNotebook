@@ -79,6 +79,8 @@ Use `Add section` below the existing tables to create another table. For example
 
 When creating a section, choose its starting columns and add any extra columns needed for that table.
 
+Use the pencil icon beside a section title to rename it. Use the trash icon to remove a section from the active notebook. Removing a section hides the section and its records, but does not erase them from storage. Enable `Show deleted sections`, then click `Restore section` to recover it.
+
 To add a column to an existing section, use the section's add-column control. To remove a column, hover over the column header and use the small remove control. Removing a column only removes that column from the table layout; it does not hard-delete old Drive files.
 
 ## Export a Record to PDF
@@ -97,7 +99,7 @@ To recover a deleted record:
 2. Open the deleted record.
 3. Click `Restore`.
 
-This soft-delete behavior is there to protect the team from accidental deletions.
+Sections use the same recovery principle: deleting one adds a deletion timestamp to the shared configuration while leaving all of its record files untouched. This soft-delete behavior is there to protect the team from accidental deletions.
 
 ## Backups
 
