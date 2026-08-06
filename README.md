@@ -1,6 +1,6 @@
 # INFUS Notebook
 
-A lightweight lab notebook prototype for tracking project records in separate notebook sections. Each section has its own table, columns, and rich detail pages with formatted text, lists, links, images, and videos.
+A lightweight shared lab notebook for project records, animal surgery cards, and collected-sample tracking. Notebook sections have configurable tables and rich detail pages; the separate Surgeries workflow is optimized for mobile photo capture.
 
 ## Run locally
 
@@ -18,11 +18,13 @@ Open `index.html` in a browser. The app stores records in browser IndexedDB, inc
 - `customFields`: user-defined columns such as owner, project, batch, instrument, strain, or priority
 - `content`: rich HTML note body
 
+Surgery records use `recordType: "surgery"` and store the surgery name, surgery date, surgical notes, card photos, termination date, termination notes, and collection photos. Active procedures and collected samples are separate views of the same recoverable record.
+
 Built-in field names can be renamed through `Edit labels`. New sections can be created with `Add section`, and each section can choose its starting columns. Section titles can be renamed from their header controls. Columns can be added from the section header and removed from the table header hover control.
 
 ## Hosting path
 
-The app can now run locally or connect to a shared Google Drive folder through a small Cloud Run backend. In hosted mode, the browser signs users in with Google, the backend checks the allowed-user list, and the backend writes sections, columns, records, images, and videos into the shared Drive folder.
+The app can run locally or connect to a shared Google Drive folder through a small Cloud Run backend. In hosted mode, the browser signs users in with Google, the backend checks the allowed-user list, and the backend writes notebook records, surgery records, images, and videos into the shared Drive folder.
 
 For day-to-day instructions, see `USER_GUIDE.md`. For admin operations such as adding authorized emails, rotating Drive tokens, and redeploying Cloud Run, see `ADMIN_GUIDE.md`.
 

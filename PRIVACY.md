@@ -4,9 +4,9 @@ INFUS Notebook is a static lab notebook app. It does not include a hosted applic
 
 ## What the app stores
 
-In local-only mode, notebook records and uploaded media are stored in your browser's IndexedDB storage on your device.
+In local-only mode, notebook records, surgery records, and uploaded media are stored in your browser's IndexedDB storage on your device.
 
-In hosted Google Drive mode, notebook configuration, record JSON files, images, and videos are stored in the shared Google Drive folder configured for the notebook. The app sends notebook changes to a Cloud Run backend, and the backend reads and writes the notebook files in that folder.
+In hosted Google Drive mode, notebook configuration, record JSON files, surgery-card images, collection images, and other uploaded media are stored in the shared Google Drive folder configured for the notebook. The app sends changes to a Cloud Run backend, and the backend reads and writes the files in that folder.
 
 ## Google sign-in and Drive access
 

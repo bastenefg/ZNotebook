@@ -5,6 +5,7 @@ const TAXONOMY_KEY = "labbook-taxonomy-v1";
 const DRIVE_SETTINGS_KEY = "definitely-not-notion-drive-v1";
 const BACKEND_CREDENTIAL_KEY = "definitely-not-notion-backend-credential-v1";
 const DEFAULT_SECTION_ID = "experiments";
+const SURGERY_SECTION_ID = "__surgeries__";
 
 const DEFAULT_STATUSES = [
   { value: "planned", label: "Planned" },
@@ -61,6 +62,7 @@ const BUILTIN_COLUMNS = {
 const ICONS = {
   add: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`,
   arrowLeft: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>`,
+  arrowRight: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`,
   close: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>`,
   drive: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14.5 8.5 6h7l4.5 8.5"/><path d="M4 14.5 7 20h10l3-5.5z"/><path d="M8.5 6 12 14.5 15.5 6"/></svg>`,
   fileText: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>`,
@@ -75,6 +77,9 @@ const ICONS = {
   pencil: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>`,
   restore: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`,
+  camera: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3z"/><circle cx="12" cy="13" r="4"/></svg>`,
+  clipboard: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="18" rx="2"/><path d="M9 4V2h6v2M9 9h6M9 13h6M9 17h4"/></svg>`,
+  checkCircle: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></svg>`,
   bold: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h7a4 4 0 0 1 0 8H7z"/><path d="M7 13h8a4 4 0 0 1 0 8H7z"/></svg>`,
   italic: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5h8M6 19h8M14 5l-4 14"/></svg>`,
   underline: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v6a5 5 0 0 0 10 0V5"/><path d="M5 21h14"/></svg>`,
@@ -95,8 +100,10 @@ const app = document.getElementById("app");
 let db;
 let experiments = [];
 let activeExperiment = null;
+let activeSurgery = null;
 let saveTimer = null;
 let currentFilters = { search: "", showDeleted: false, showDeletedSections: false };
+let surgeryFilters = { search: "" };
 let taxonomy = loadTaxonomy();
 let driveSettings = loadDriveSettings();
 let driveState = {
@@ -558,10 +565,10 @@ function replaceAllExperiments(records) {
 }
 
 async function saveExperimentRecord(experiment) {
-  await putExperiment(experiment);
   if (driveState.connected) {
     await driveSaveRecord(experiment);
   }
+  await putExperiment(experiment);
 }
 
 async function markExperimentDeleted(experiment) {
@@ -586,10 +593,84 @@ async function restoreExperimentRecord(experiment) {
   return restoredRecord;
 }
 
+function isSurgeryRecord(record) {
+  return Boolean(record && record.recordType === "surgery");
+}
+
+function normalizedRecordDate(value, fallback = today()) {
+  const candidate = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(candidate) ? candidate : fallback;
+}
+
+function normalizeSurgeryPhoto(photo) {
+  if (!photo || typeof photo !== "object") return null;
+  const driveFileId = String(photo.driveFileId || "").trim();
+  const candidateDataUrl = String(photo.dataUrl || "").trim();
+  const dataUrl = /^data:image\/[a-z0-9.+-]+;base64,/i.test(candidateDataUrl)
+    ? candidateDataUrl
+    : "";
+  if (!driveFileId && !dataUrl) return null;
+
+  return {
+    id: String(photo.id || uid()),
+    name: String(photo.name || "Surgery photo"),
+    mimeType: String(photo.mimeType || "image/jpeg"),
+    driveFileId,
+    dataUrl,
+    createdAt: String(photo.createdAt || now()),
+  };
+}
+
+function normalizeSurgeryRecord(record) {
+  const timestamp = now();
+  const surgeryDate = normalizedRecordDate(record.surgeryDate || record.startDate);
+  const normalized = {
+    id: String(record.id || uid()),
+    recordType: "surgery",
+    sectionId: SURGERY_SECTION_ID,
+    title: String(record.title || record.name || "Untitled surgery"),
+    surgeryDate,
+    startDate: surgeryDate,
+    surgeryNotes: String(record.surgeryNotes || record.notes || ""),
+    surgeryPhotos: (Array.isArray(record.surgeryPhotos) ? record.surgeryPhotos : [])
+      .map(normalizeSurgeryPhoto)
+      .filter(Boolean),
+    terminationDate: record.terminationDate
+      ? normalizedRecordDate(record.terminationDate, surgeryDate)
+      : "",
+    terminationNotes: String(record.terminationNotes || ""),
+    terminationPhotos: (Array.isArray(record.terminationPhotos) ? record.terminationPhotos : [])
+      .map(normalizeSurgeryPhoto)
+      .filter(Boolean),
+    terminatedAt: String(record.terminatedAt || ""),
+    createdAt: String(record.createdAt || timestamp),
+    updatedAt: String(record.updatedAt || timestamp),
+  };
+  if (record.deletedAt) normalized.deletedAt = String(record.deletedAt);
+  return normalized;
+}
+
+function createSurgery(seed = {}) {
+  return normalizeSurgeryRecord({
+    id: uid(),
+    recordType: "surgery",
+    title: seed.title || "Untitled surgery",
+    surgeryDate: seed.surgeryDate || today(),
+    surgeryNotes: seed.surgeryNotes || "",
+    surgeryPhotos: [],
+    terminationDate: "",
+    terminationNotes: "",
+    terminationPhotos: [],
+    createdAt: now(),
+    updatedAt: now(),
+  });
+}
+
 function createExperiment(section, seed = {}) {
   const timestamp = now();
   return {
     id: uid(),
+    recordType: "notebook",
     sectionId: section.id,
     title: seed.title || `Untitled ${section.name}`,
     startDate: seed.startDate || today(),
@@ -607,15 +688,19 @@ function createExperiment(section, seed = {}) {
 }
 
 async function loadExperiments() {
-  experiments = await getAllExperiments();
-  experiments.forEach((experiment) => {
+  experiments = (await getAllExperiments()).map((experiment) => {
+    if (isSurgeryRecord(experiment)) return normalizeSurgeryRecord(experiment);
+    if (!experiment.recordType) experiment.recordType = "notebook";
     if (!experiment.sectionId) experiment.sectionId = DEFAULT_SECTION_ID;
     if (!experiment.customFields || typeof experiment.customFields !== "object") {
       experiment.customFields = {};
     }
+    return experiment;
   });
   experiments.sort((a, b) => {
-    const dateSort = (b.startDate || "").localeCompare(a.startDate || "");
+    const dateSort = (b.surgeryDate || b.startDate || "").localeCompare(
+      a.surgeryDate || a.startDate || "",
+    );
     if (dateSort !== 0) return dateSort;
     return (b.updatedAt || "").localeCompare(a.updatedAt || "");
   });
@@ -696,6 +781,7 @@ function optionList(options, selected) {
 function sectionRecords(section) {
   const query = currentFilters.search.toLowerCase();
   return experiments.filter((experiment) => {
+    if (isSurgeryRecord(experiment)) return false;
     if (experiment.sectionId !== section.id) return false;
     if (!currentFilters.showDeleted && isDeletedRecord(experiment)) return false;
     if (!query) return true;
@@ -716,16 +802,27 @@ function sectionRecords(section) {
 
 function renderShell(content) {
   revokeDriveObjectUrls();
-  document.title = term("appName");
+  const surgeriesActive = /^#\/surger/.test(location.hash || "");
+  document.title = surgeriesActive ? `Surgeries | ${term("appName")}` : term("appName");
   app.innerHTML = `
     <header class="topbar">
-      <a class="brand" href="#/" aria-label="${escapeHtml(term("appName"))} home">
-        <span class="brand-mark" aria-hidden="true">INFUS</span>
-        <span class="brand-text">
-          <span class="brand-name">${escapeHtml(term("appName"))}</span>
-          <span class="brand-subtitle">${escapeHtml(term("notebook"))}</span>
-        </span>
-      </a>
+      <div class="brand-navigation">
+        <a class="brand" href="#/" aria-label="${escapeHtml(term("appName"))} home">
+          <span class="brand-mark" aria-hidden="true">INFUS</span>
+          <span class="brand-text">
+            <span class="brand-name">${escapeHtml(term("appName"))}</span>
+            <span class="brand-subtitle">${escapeHtml(term("notebook"))}</span>
+          </span>
+        </a>
+        <nav class="primary-navigation" aria-label="Primary navigation">
+          <a class="primary-nav-link ${surgeriesActive ? "" : "active"}" href="#/" ${
+            surgeriesActive ? "" : 'aria-current="page"'
+          }>Notebook</a>
+          <a class="primary-nav-link ${surgeriesActive ? "active" : ""}" href="#/surgeries" ${
+            surgeriesActive ? 'aria-current="page"' : ""
+          }>Surgeries</a>
+        </nav>
+      </div>
       <div class="topbar-actions">
         <span class="storage-state ${driveState.connected ? "is-connected" : ""}" role="status" aria-live="polite">
           <span class="storage-dot" aria-hidden="true"></span>
@@ -768,6 +865,7 @@ function resetDriveState(status = "Local only") {
 
 function renderListPage() {
   activeExperiment = null;
+  activeSurgery = null;
   const hasDeletedSections = sections().some(isDeletedSection);
   renderShell(`
     <main class="page">
@@ -1015,6 +1113,718 @@ function renderColumnValue(column, experiment) {
   return escapeHtml(String(value));
 }
 
+function surgeryRecords() {
+  return experiments.filter(
+    (record) => isSurgeryRecord(record) && !isDeletedRecord(record),
+  );
+}
+
+function surgeryStorageLocked() {
+  return Boolean(driveSettings.configuredByHost && !driveState.connected);
+}
+
+function requireSurgeryStorage() {
+  if (!surgeryStorageLocked()) return true;
+  openDriveDialog();
+  return false;
+}
+
+function surgeryStorageNoticeMarkup() {
+  if (!surgeryStorageLocked()) return "";
+  return `
+    <section class="storage-notice">
+      <div>
+        <strong>Connect Drive before adding or editing surgery records</strong>
+        <span>This keeps card photos and procedure details in the shared private storage rather than only on this device.</span>
+      </div>
+      <button class="btn primary" type="button" data-action="connect-surgery-storage">${ICONS.drive} Connect Drive</button>
+    </section>
+  `;
+}
+
+function bindSurgeryStorageNotice(root = app) {
+  root.querySelector("[data-action='connect-surgery-storage']")?.addEventListener("click", openDriveDialog);
+}
+
+function surgeryMatchesSearch(record, query) {
+  if (!query) return true;
+  return [
+    record.title,
+    record.surgeryDate,
+    record.surgeryNotes,
+    record.terminationDate,
+    record.terminationNotes,
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(query);
+}
+
+function renderSurgeryPhotoImage(photo, className = "") {
+  const normalized = normalizeSurgeryPhoto(photo);
+  if (!normalized) return "";
+  const sourceAttribute = normalized.dataUrl
+    ? `src="${escapeHtml(normalized.dataUrl)}"`
+    : "";
+  const driveAttributes = normalized.driveFileId
+    ? `data-drive-file-id="${escapeHtml(normalized.driveFileId)}" data-drive-mime="${escapeHtml(
+        normalized.mimeType,
+      )}"`
+    : "";
+  return `<img class="${className}" ${sourceAttribute} ${driveAttributes} alt="${escapeHtml(
+    normalized.name,
+  )}" />`;
+}
+
+function renderSurgeryThumbnail(record) {
+  const photo = record.surgeryPhotos[0] || record.terminationPhotos[0];
+  if (!photo) return `<div class="surgery-thumbnail empty-thumbnail">${ICONS.camera}</div>`;
+  return `<div class="surgery-thumbnail">${renderSurgeryPhotoImage(photo, "surgery-thumbnail-image")}</div>`;
+}
+
+function renderSurgeryRow(record, collected) {
+  const surgeryPhotoCount = record.surgeryPhotos.length;
+  const collectionPhotoCount = record.terminationPhotos.length;
+  return `
+    <a class="surgery-row" href="#/surgery/${escapeHtml(record.id)}">
+      ${renderSurgeryThumbnail(record)}
+      <div class="surgery-row-main">
+        <div class="surgery-row-heading">
+          <strong>${escapeHtml(record.title)}</strong>
+          <span class="pill ${collected ? "sample-collected" : "surgery-active"}">${
+            collected ? "Collected" : "Active"
+          }</span>
+        </div>
+        <span class="surgery-row-note">${escapeHtml(
+          record.surgeryNotes || (collected ? record.terminationNotes : "No surgical notes"),
+        )}</span>
+      </div>
+      <dl class="surgery-row-meta">
+        <div>
+          <dt>Surgery</dt>
+          <dd>${escapeHtml(formatDate(record.surgeryDate))}</dd>
+        </div>
+        ${
+          collected
+            ? `<div><dt>Collected</dt><dd>${escapeHtml(formatDate(record.terminationDate))}</dd></div>`
+            : ""
+        }
+        <div>
+          <dt>Photos</dt>
+          <dd>${surgeryPhotoCount + collectionPhotoCount}</dd>
+        </div>
+      </dl>
+      <span class="surgery-row-arrow" aria-hidden="true">${ICONS.arrowRight}</span>
+    </a>
+  `;
+}
+
+function renderSurgeriesPage(view = "active") {
+  activeExperiment = null;
+  activeSurgery = null;
+  const selectedView = view === "collected" ? "collected" : "active";
+  const allSurgeries = surgeryRecords();
+  const activeRecords = allSurgeries.filter((record) => !record.terminationDate);
+  const collectedRecords = allSurgeries.filter((record) => Boolean(record.terminationDate));
+  const sourceRecords = selectedView === "collected" ? collectedRecords : activeRecords;
+  const query = surgeryFilters.search.trim().toLowerCase();
+  const visibleRecords = sourceRecords
+    .filter((record) => surgeryMatchesSearch(record, query))
+    .sort((a, b) => {
+      const aDate = selectedView === "collected" ? a.terminationDate : a.surgeryDate;
+      const bDate = selectedView === "collected" ? b.terminationDate : b.surgeryDate;
+      return (bDate || "").localeCompare(aDate || "") || b.updatedAt.localeCompare(a.updatedAt);
+    });
+
+  renderShell(`
+    <main class="page surgeries-page">
+      <section class="page-header">
+        <div>
+          <p class="eyebrow">Animal procedures</p>
+          <h1>Surgeries</h1>
+        </div>
+        <div class="page-actions surgery-page-actions">
+          <button class="btn ghost" type="button" data-action="new-surgery-manual">${ICONS.add} Add manually</button>
+          <button class="btn primary" type="button" data-action="take-surgery-photo">${ICONS.camera} Take picture</button>
+        </div>
+      </section>
+
+      ${surgeryStorageNoticeMarkup()}
+
+      <input class="hidden" type="file" accept="image/*" capture="environment" data-surgery-page-camera />
+
+      <section class="surgery-controls" aria-label="Surgery records">
+        <nav class="view-tabs" aria-label="Surgery status">
+          <a class="view-tab ${selectedView === "active" ? "active" : ""}" href="#/surgeries" ${
+            selectedView === "active" ? 'aria-current="page"' : ""
+          }>
+            <span>Active surgeries</span><strong>${activeRecords.length}</strong>
+          </a>
+          <a class="view-tab ${selectedView === "collected" ? "active" : ""}" href="#/surgeries/collected" ${
+            selectedView === "collected" ? 'aria-current="page"' : ""
+          }>
+            <span>Collected samples</span><strong>${collectedRecords.length}</strong>
+          </a>
+        </nav>
+        <div class="search-control surgery-search">
+          ${ICONS.search}
+          <input class="field" type="search" aria-label="Search surgeries" placeholder="Search surgeries" value="${escapeHtml(
+            surgeryFilters.search,
+          )}" data-surgery-search />
+        </div>
+      </section>
+
+      <div class="panel surgery-list">
+        ${
+          visibleRecords.length
+            ? visibleRecords
+                .map((record) => renderSurgeryRow(record, selectedView === "collected"))
+                .join("")
+            : `<div class="empty surgery-empty">
+                <div class="empty-icon">${selectedView === "collected" ? ICONS.checkCircle : ICONS.clipboard}</div>
+                <div>
+                  <strong>${query ? "No matching procedures" : selectedView === "collected" ? "No collected samples yet" : "No active surgeries yet"}</strong>
+                  <span>${query ? "Try a different search." : selectedView === "collected" ? "Terminated procedures will move here automatically." : "Take a picture of a surgery card to add the first procedure."}</span>
+                </div>
+                ${
+                  !query && selectedView === "active"
+                    ? `<button class="btn primary" type="button" data-action="take-surgery-photo">${ICONS.camera} Take picture</button>`
+                    : ""
+                }
+              </div>`
+        }
+      </div>
+    </main>
+  `);
+
+  const cameraInput = app.querySelector("[data-surgery-page-camera]");
+  app.querySelectorAll("[data-action='take-surgery-photo']").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (requireSurgeryStorage()) cameraInput.click();
+    });
+  });
+  app.querySelector("[data-action='new-surgery-manual']").addEventListener("click", () => {
+    if (requireSurgeryStorage()) openNewSurgeryDialog();
+  });
+  cameraInput.addEventListener("change", () => {
+    const files = Array.from(cameraInput.files || []);
+    cameraInput.value = "";
+    if (files.length) openNewSurgeryDialog(files);
+  });
+  app.querySelector("[data-surgery-search]").addEventListener("input", (event) => {
+    surgeryFilters.search = event.target.value;
+    renderSurgeriesPage(selectedView);
+    const search = app.querySelector("[data-surgery-search]");
+    search.focus();
+    search.setSelectionRange(search.value.length, search.value.length);
+  });
+  bindSurgeryStorageNotice();
+  hydrateDriveMedia(app.querySelector(".surgeries-page"));
+}
+
+function pendingPhotoControlsMarkup() {
+  return `
+    <div class="pending-photo-actions">
+      <button class="btn" type="button" data-action="pending-camera">${ICONS.camera} Take picture</button>
+      <button class="btn ghost" type="button" data-action="pending-gallery">${ICONS.image} Choose photos</button>
+    </div>
+    <input class="hidden" type="file" accept="image/*" capture="environment" data-pending-input="camera" />
+    <input class="hidden" type="file" accept="image/*" multiple data-pending-input="gallery" />
+    <div class="pending-photo-grid" data-pending-photos></div>
+  `;
+}
+
+function createPendingPhotoManager(dialog, initialFiles = []) {
+  let files = Array.from(initialFiles).filter(isImageFile);
+  let previewUrls = [];
+  const preview = dialog.querySelector("[data-pending-photos]");
+
+  const render = () => {
+    previewUrls.forEach((url) => URL.revokeObjectURL(url));
+    previewUrls = files.map((file) => URL.createObjectURL(file));
+    preview.innerHTML = files.length
+      ? files
+          .map(
+            (file, index) => `
+              <figure class="pending-photo">
+                <img src="${previewUrls[index]}" alt="${escapeHtml(file.name || "Selected photo")}" />
+                <figcaption title="${escapeHtml(file.name || "Selected photo")}">${escapeHtml(
+                  file.name || `Photo ${index + 1}`,
+                )}</figcaption>
+                <button class="icon-btn compact danger-ghost" type="button" title="Remove photo" aria-label="Remove ${escapeHtml(
+                  file.name || `photo ${index + 1}`,
+                )}" data-pending-remove="${index}">${ICONS.close}</button>
+              </figure>
+            `,
+          )
+          .join("")
+      : `<p class="pending-photo-empty">No photos selected yet.</p>`;
+  };
+
+  dialog.querySelector("[data-action='pending-camera']").addEventListener("click", () => {
+    dialog.querySelector("[data-pending-input='camera']").click();
+  });
+  dialog.querySelector("[data-action='pending-gallery']").addEventListener("click", () => {
+    dialog.querySelector("[data-pending-input='gallery']").click();
+  });
+  dialog.querySelectorAll("[data-pending-input]").forEach((input) => {
+    input.addEventListener("change", () => {
+      files.push(...Array.from(input.files || []).filter(isImageFile));
+      input.value = "";
+      render();
+    });
+  });
+  preview.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-pending-remove]");
+    if (!button) return;
+    files.splice(Number(button.dataset.pendingRemove), 1);
+    render();
+  });
+
+  render();
+  return {
+    files: () => [...files],
+    cleanup: () => {
+      previewUrls.forEach((url) => URL.revokeObjectURL(url));
+      previewUrls = [];
+    },
+  };
+}
+
+function openNewSurgeryDialog(initialFiles = []) {
+  if (!requireSurgeryStorage()) return;
+  const dialog = document.createElement("div");
+  dialog.className = "dialog-backdrop";
+  dialog.innerHTML = `
+    <form class="panel dialog surgery-dialog" data-new-surgery-form>
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">New procedure</p>
+          <h2>Add surgery</h2>
+        </div>
+        <button class="icon-btn" type="button" title="Close" aria-label="Close" data-dialog-close>${ICONS.close}</button>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="surgeryName">Surgery name</label>
+        <input id="surgeryName" class="field" name="title" required placeholder="Animal ID or procedure name" />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="surgeryDate">Surgery date</label>
+        <input id="surgeryDate" class="field" name="surgeryDate" type="date" required value="${today()}" />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="surgeryNotes">Surgical notes</label>
+        <textarea id="surgeryNotes" class="textarea surgery-notes-input" name="surgeryNotes" placeholder="Procedure, animal, implant, observations, or follow-up notes"></textarea>
+      </div>
+      <div class="field-group">
+        <span class="field-label">Surgery card photos</span>
+        ${pendingPhotoControlsMarkup()}
+      </div>
+      <p class="save-state dialog-save-state" role="status" aria-live="polite" data-surgery-dialog-status></p>
+      <div class="dialog-actions">
+        <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
+        <button class="btn primary" type="submit">Save surgery</button>
+      </div>
+    </form>
+  `;
+
+  document.body.appendChild(dialog);
+  const form = dialog.querySelector("[data-new-surgery-form]");
+  const status = dialog.querySelector("[data-surgery-dialog-status]");
+  const submit = form.querySelector("[type='submit']");
+  const photoManager = createPendingPhotoManager(dialog, initialFiles);
+  wireDialogClose(dialog, photoManager.cleanup);
+  dialog.querySelector("#surgeryName").focus();
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const surgery = createSurgery({
+      title: String(data.get("title") || "").trim(),
+      surgeryDate: String(data.get("surgeryDate") || today()),
+      surgeryNotes: String(data.get("surgeryNotes") || "").trim(),
+    });
+    const files = photoManager.files();
+    submit.disabled = true;
+    status.textContent = "Saving surgery...";
+    let savedLocally = false;
+
+    try {
+      await saveExperimentRecord(surgery);
+      savedLocally = true;
+      await appendSurgeryPhotos(surgery, "surgeryPhotos", files, (index, total) => {
+        status.textContent = `Uploading photo ${index} of ${total}...`;
+      });
+      await loadExperiments();
+      photoManager.cleanup();
+      dialog.remove();
+      location.hash = `#/surgery/${surgery.id}`;
+    } catch (error) {
+      console.error(error);
+      submit.disabled = false;
+      status.textContent = "Save failed";
+      if (savedLocally) {
+        await loadExperiments();
+        photoManager.cleanup();
+        dialog.remove();
+        if (driveState.connected) handleDriveError(error);
+        else window.alert(`The surgery was saved locally, but some photos could not be stored: ${error.message || String(error)}`);
+        location.hash = `#/surgery/${surgery.id}`;
+      } else {
+        if (driveState.connected) {
+          handleDriveError(error);
+          status.textContent = "Reconnect Drive, then try saving again.";
+          openDriveDialog();
+        } else {
+          window.alert(error.message || String(error));
+        }
+      }
+    }
+  });
+}
+
+function renderSurgeryGallery(photos, emptyMessage) {
+  if (!photos.length) {
+    return `
+      <div class="surgery-gallery-empty">
+        ${ICONS.camera}
+        <strong>No photos yet</strong>
+        <span>${escapeHtml(emptyMessage)}</span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="surgery-gallery">
+      ${photos
+        .map(
+          (photo, index) => `
+            <figure class="surgery-photo-card">
+              <button type="button" data-view-surgery-photo title="Open ${escapeHtml(
+                photo.name,
+              )}" aria-label="Open ${escapeHtml(photo.name)}">
+                ${renderSurgeryPhotoImage(photo, "surgery-photo-image")}
+              </button>
+              <figcaption>${escapeHtml(photo.name || `Photo ${index + 1}`)}</figcaption>
+            </figure>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function bindSurgeryPhotoLightbox(root) {
+  root.querySelectorAll("[data-view-surgery-photo]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const source = button.querySelector("img")?.currentSrc || button.querySelector("img")?.src;
+      if (!source) {
+        window.alert("Connect Drive to view this photo.");
+        return;
+      }
+
+      const dialog = document.createElement("div");
+      dialog.className = "dialog-backdrop photo-lightbox-backdrop";
+      dialog.innerHTML = `
+        <div class="photo-lightbox" role="dialog" aria-modal="true" aria-label="Surgery photo">
+          <button class="icon-btn photo-lightbox-close" type="button" title="Close" aria-label="Close" data-dialog-close>${ICONS.close}</button>
+          <img src="${escapeHtml(source)}" alt="${escapeHtml(
+            button.querySelector("img")?.alt || "Surgery photo",
+          )}" />
+        </div>
+      `;
+      document.body.appendChild(dialog);
+      wireDialogClose(dialog);
+      dialog.querySelector("[data-dialog-close]").focus();
+    });
+  });
+}
+
+async function renderSurgeryDetailPage(id) {
+  const record = await getExperiment(id);
+  if (!record || !isSurgeryRecord(record)) {
+    location.hash = "#/surgeries";
+    return;
+  }
+
+  activeExperiment = null;
+  activeSurgery = normalizeSurgeryRecord(record);
+  const collected = Boolean(activeSurgery.terminationDate);
+  const storageLocked = surgeryStorageLocked();
+  renderShell(`
+    <main class="page surgery-detail-page">
+      <section class="page-header surgery-detail-header">
+        <div>
+          <p class="eyebrow">${collected ? "Collected sample" : "Active surgery"}</p>
+          <div class="detail-heading-line">
+            <h1>${escapeHtml(activeSurgery.title)}</h1>
+            <span class="pill ${collected ? "sample-collected" : "surgery-active"}">${
+              collected ? "Collected" : "Active"
+            }</span>
+          </div>
+        </div>
+        <div class="page-actions">
+          <span class="save-state" data-surgery-save-state role="status" aria-live="polite">Saved</span>
+          <a class="btn ghost" href="${collected ? "#/surgeries/collected" : "#/surgeries"}">${ICONS.arrowLeft} Back</a>
+        </div>
+      </section>
+
+      ${surgeryStorageNoticeMarkup()}
+
+      <section class="surgery-detail-grid">
+        <div class="surgery-photo-section">
+          <div class="subsection-heading">
+            <div>
+              <p class="eyebrow">Procedure record</p>
+              <h2>Surgery card</h2>
+            </div>
+            <div class="subsection-actions">
+              <button class="btn ghost" type="button" data-action="choose-surgery-photo" ${
+                storageLocked ? "disabled" : ""
+              }>${ICONS.image} Add photos</button>
+              <button class="btn" type="button" data-action="capture-surgery-photo" ${
+                storageLocked ? "disabled" : ""
+              }>${ICONS.camera} Take picture</button>
+            </div>
+          </div>
+          ${renderSurgeryGallery(
+            activeSurgery.surgeryPhotos,
+            "Take a picture of the completed surgery card or choose one from this device.",
+          )}
+        </div>
+
+        <form class="panel surgery-details-panel" data-surgery-details-form>
+          <div class="field-group">
+            <label class="field-label" for="detailSurgeryName">Surgery name</label>
+            <input id="detailSurgeryName" class="field" name="title" required ${
+              storageLocked ? "disabled" : ""
+            } value="${escapeHtml(
+              activeSurgery.title,
+            )}" />
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="detailSurgeryDate">Surgery date</label>
+            <input id="detailSurgeryDate" class="field" name="surgeryDate" type="date" required ${
+              storageLocked ? "disabled" : ""
+            } value="${escapeHtml(
+              activeSurgery.surgeryDate,
+            )}" />
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="detailSurgeryNotes">Surgical notes</label>
+            <textarea id="detailSurgeryNotes" class="textarea surgery-notes-input" name="surgeryNotes" ${
+              storageLocked ? "disabled" : ""
+            } placeholder="Procedure, animal, implant, observations, or follow-up notes">${escapeHtml(
+              activeSurgery.surgeryNotes,
+            )}</textarea>
+          </div>
+          <div class="form-actions">
+            <button class="btn primary" type="submit" ${storageLocked ? "disabled" : ""}>Save changes</button>
+          </div>
+        </form>
+      </section>
+
+      <input class="hidden" type="file" accept="image/*" capture="environment" data-detail-surgery-camera ${
+        storageLocked ? "disabled" : ""
+      } />
+      <input class="hidden" type="file" accept="image/*" multiple data-detail-surgery-gallery ${
+        storageLocked ? "disabled" : ""
+      } />
+
+      ${
+        collected
+          ? `<section class="collection-section">
+              <div class="subsection-heading collection-heading">
+                <div>
+                  <p class="eyebrow">Tissue collection</p>
+                  <h2>Collected sample</h2>
+                </div>
+                <button class="btn ghost" type="button" data-action="edit-termination" ${
+                  storageLocked ? "disabled" : ""
+                }>${ICONS.pencil} Edit collection details</button>
+              </div>
+              <div class="collection-summary">
+                <div class="collection-date-block">
+                  <span>Termination date</span>
+                  <strong>${escapeHtml(formatDate(activeSurgery.terminationDate))}</strong>
+                </div>
+                <div class="collection-notes-block">
+                  <span>Termination and collection notes</span>
+                  <p>${escapeHtml(activeSurgery.terminationNotes || "No termination notes added.")}</p>
+                </div>
+              </div>
+              ${renderSurgeryGallery(
+                activeSurgery.terminationPhotos,
+                "Add tissue, collection, or termination record photos.",
+              )}
+            </section>`
+          : `<section class="collection-callout">
+              <div class="collection-callout-icon">${ICONS.checkCircle}</div>
+              <div>
+                <strong>Ready to record tissue collection?</strong>
+                <span>Enter the termination date, notes, and any collection photos. This procedure will move to Collected samples.</span>
+              </div>
+              <button class="btn primary" type="button" data-action="terminate-surgery" ${
+                storageLocked ? "disabled" : ""
+              }>Terminate &amp; collect</button>
+            </section>`
+      }
+    </main>
+  `);
+
+  const detailsForm = app.querySelector("[data-surgery-details-form]");
+  detailsForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!requireSurgeryStorage()) return;
+    const data = new FormData(detailsForm);
+    const button = detailsForm.querySelector("[type='submit']");
+    button.disabled = true;
+    setSurgerySaveState("Saving...");
+    activeSurgery.title = String(data.get("title") || "").trim();
+    activeSurgery.surgeryDate = normalizedRecordDate(data.get("surgeryDate"));
+    activeSurgery.startDate = activeSurgery.surgeryDate;
+    activeSurgery.surgeryNotes = String(data.get("surgeryNotes") || "").trim();
+    activeSurgery.updatedAt = now();
+
+    try {
+      await saveExperimentRecord(activeSurgery);
+      await loadExperiments();
+      await renderSurgeryDetailPage(activeSurgery.id);
+    } catch (error) {
+      console.error(error);
+      setSurgerySaveState("Save failed");
+      if (driveState.connected) handleDriveError(error);
+      else window.alert(error.message || String(error));
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  const cameraInput = app.querySelector("[data-detail-surgery-camera]");
+  const galleryInput = app.querySelector("[data-detail-surgery-gallery]");
+  app.querySelector("[data-action='capture-surgery-photo']").addEventListener("click", () => cameraInput.click());
+  app.querySelector("[data-action='choose-surgery-photo']").addEventListener("click", () => galleryInput.click());
+  [cameraInput, galleryInput].forEach((input) => {
+    input.addEventListener("change", async () => {
+      const files = Array.from(input.files || []);
+      input.value = "";
+      if (files.length) await addPhotosToActiveSurgery("surgeryPhotos", files);
+    });
+  });
+
+  app.querySelector("[data-action='terminate-surgery']")?.addEventListener("click", () => {
+    openTerminationDialog(activeSurgery, false);
+  });
+  app.querySelector("[data-action='edit-termination']")?.addEventListener("click", () => {
+    openTerminationDialog(activeSurgery, true);
+  });
+  bindSurgeryStorageNotice();
+  bindSurgeryPhotoLightbox(app.querySelector(".surgery-detail-page"));
+  hydrateDriveMedia(app.querySelector(".surgery-detail-page"));
+}
+
+function setSurgerySaveState(label) {
+  const state = app.querySelector("[data-surgery-save-state]");
+  if (state) state.textContent = label;
+}
+
+async function addPhotosToActiveSurgery(field, files) {
+  if (!activeSurgery || !requireSurgeryStorage()) return;
+  try {
+    await appendSurgeryPhotos(activeSurgery, field, files, (index, total) => {
+      setSurgerySaveState(`Uploading photo ${index} of ${total}...`);
+    });
+    await loadExperiments();
+    await renderSurgeryDetailPage(activeSurgery.id);
+  } catch (error) {
+    console.error(error);
+    setSurgerySaveState("Upload failed");
+    if (driveState.connected) handleDriveError(error);
+    else window.alert(error.message || String(error));
+  }
+}
+
+function openTerminationDialog(surgery, editing) {
+  if (!requireSurgeryStorage()) return;
+  const dialog = document.createElement("div");
+  dialog.className = "dialog-backdrop";
+  dialog.innerHTML = `
+    <form class="panel dialog surgery-dialog" data-termination-form>
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">Tissue collection</p>
+          <h2>${editing ? "Edit collection details" : "Terminate procedure"}</h2>
+        </div>
+        <button class="icon-btn" type="button" title="Close" aria-label="Close" data-dialog-close>${ICONS.close}</button>
+      </div>
+      <p class="dialog-copy">${
+        editing
+          ? "Update the termination record or attach more collection photos."
+          : "This moves the procedure from Active surgeries to Collected samples."
+      }</p>
+      <div class="field-group">
+        <label class="field-label" for="terminationDate">Termination date</label>
+        <input id="terminationDate" class="field" name="terminationDate" type="date" min="${escapeHtml(
+          surgery.surgeryDate,
+        )}" required value="${escapeHtml(surgery.terminationDate || today())}" />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="terminationNotes">Termination and collection notes</label>
+        <textarea id="terminationNotes" class="textarea surgery-notes-input" name="terminationNotes" placeholder="Euthanasia, tissue collected, sample IDs, preservation, or observations">${escapeHtml(
+          surgery.terminationNotes,
+        )}</textarea>
+      </div>
+      <div class="field-group">
+        <span class="field-label">Collection photos</span>
+        ${pendingPhotoControlsMarkup()}
+      </div>
+      <p class="save-state dialog-save-state" role="status" aria-live="polite" data-termination-status></p>
+      <div class="dialog-actions">
+        <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
+        <button class="btn primary" type="submit">${editing ? "Save changes" : "Mark terminated"}</button>
+      </div>
+    </form>
+  `;
+
+  document.body.appendChild(dialog);
+  const form = dialog.querySelector("[data-termination-form]");
+  const status = dialog.querySelector("[data-termination-status]");
+  const submit = form.querySelector("[type='submit']");
+  const photoManager = createPendingPhotoManager(dialog);
+  wireDialogClose(dialog, photoManager.cleanup);
+  dialog.querySelector("#terminationDate").focus();
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const files = photoManager.files();
+    submit.disabled = true;
+    status.textContent = "Saving collection record...";
+    surgery.terminationDate = normalizedRecordDate(data.get("terminationDate"), today());
+    surgery.terminationNotes = String(data.get("terminationNotes") || "").trim();
+    surgery.terminatedAt = surgery.terminatedAt || now();
+    surgery.updatedAt = now();
+
+    try {
+      await saveExperimentRecord(surgery);
+      await appendSurgeryPhotos(surgery, "terminationPhotos", files, (index, total) => {
+        status.textContent = `Uploading photo ${index} of ${total}...`;
+      });
+      await loadExperiments();
+      photoManager.cleanup();
+      dialog.remove();
+      if (editing) await renderSurgeryDetailPage(surgery.id);
+      else location.hash = "#/surgeries/collected";
+    } catch (error) {
+      console.error(error);
+      submit.disabled = false;
+      status.textContent = "Save failed";
+      if (driveState.connected) handleDriveError(error);
+      else window.alert(error.message || String(error));
+    }
+  });
+}
+
 function renderLabels(labels, removable) {
   if (!labels.length) return `<span class="subtle">None</span>`;
   return `<div class="label-stack">${labels
@@ -1051,6 +1861,11 @@ async function renderDetailPage(id) {
 
   if (!activeExperiment) {
     location.hash = "#/";
+    return;
+  }
+
+  if (isSurgeryRecord(activeExperiment)) {
+    location.hash = `#/surgery/${activeExperiment.id}`;
     return;
   }
 
@@ -1944,13 +2759,19 @@ async function removeColumn(sectionId, columnId) {
   await route();
 }
 
-function wireDialogClose(dialog) {
-  dialog.querySelector("[data-dialog-close]").addEventListener("click", () => dialog.remove());
+function wireDialogClose(dialog, onClose = () => {}) {
+  const close = () => {
+    onClose();
+    dialog.remove();
+  };
+  dialog.querySelectorAll("[data-dialog-close]").forEach((button) => {
+    button.addEventListener("click", close);
+  });
   dialog.addEventListener("click", (event) => {
-    if (event.target === dialog) dialog.remove();
+    if (event.target === dialog) close();
   });
   dialog.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") dialog.remove();
+    if (event.key === "Escape") close();
   });
 }
 
@@ -2138,6 +2959,7 @@ function normalizeBackupRecords(records) {
   return records
     .filter((record) => record && typeof record === "object")
     .map((record) => {
+      if (isSurgeryRecord(record)) return normalizeSurgeryRecord(record);
       const timestamp = now();
       const customFields =
         record.customFields && typeof record.customFields === "object"
@@ -2151,6 +2973,7 @@ function normalizeBackupRecords(records) {
 
       const normalized = {
         id: String(record.id || uid()),
+        recordType: "notebook",
         sectionId: sectionIds.has(record.sectionId) ? record.sectionId : fallbackSectionId,
         title: String(record.title || "Untitled record"),
         startDate: String(record.startDate || today()),
@@ -2398,6 +3221,61 @@ async function driveBlobUrl(fileId) {
   return url;
 }
 
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Could not read image."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function isImageFile(file) {
+  return Boolean(
+    file &&
+      (String(file.type || "").startsWith("image/") ||
+        /\.(avif|heic|heif|jpe?g|png|webp)$/i.test(String(file.name || ""))),
+  );
+}
+
+async function storeSurgeryPhoto(recordId, file) {
+  if (!isImageFile(file)) throw new Error(`${file?.name || "The selected file"} is not an image.`);
+
+  if (driveState.connected) {
+    const uploaded = await driveUploadAsset(recordId, file);
+    return normalizeSurgeryPhoto({
+      id: uid(),
+      name: file.name || uploaded.name || "Surgery photo",
+      mimeType: uploaded.mimeType || file.type || "image/jpeg",
+      driveFileId: uploaded.id,
+      createdAt: now(),
+    });
+  }
+
+  return normalizeSurgeryPhoto({
+    id: uid(),
+    name: file.name || "Surgery photo",
+    mimeType: file.type || "image/jpeg",
+    dataUrl: await fileToDataUrl(file),
+    createdAt: now(),
+  });
+}
+
+async function appendSurgeryPhotos(record, field, files, onProgress = () => {}) {
+  const imageFiles = Array.from(files || []).filter(isImageFile);
+  record[field] = Array.isArray(record[field]) ? record[field] : [];
+
+  for (let index = 0; index < imageFiles.length; index += 1) {
+    onProgress(index + 1, imageFiles.length);
+    const photo = await storeSurgeryPhoto(record.id, imageFiles[index]);
+    if (!photo) continue;
+    record[field].push(photo);
+    record.updatedAt = now();
+    await saveExperimentRecord(record);
+  }
+  return record;
+}
+
 async function backendRequest(path, options = {}) {
   const response = await backendFetch(path, options);
   if (!response.ok) throw await backendError(response);
@@ -2634,7 +3512,7 @@ function collectLabelString(root) {
 
 async function seedIfEmpty() {
   const existing = await getAllExperiments();
-  if (existing.length) return;
+  if (existing.some((record) => !isSurgeryRecord(record))) return;
 
   const section = sectionById(DEFAULT_SECTION_ID);
   await saveExperimentRecord(
@@ -2653,6 +3531,18 @@ async function seedIfEmpty() {
 
 async function route() {
   const hash = location.hash || "#/";
+  if (hash.startsWith("#/surgery/")) {
+    await renderSurgeryDetailPage(hash.replace("#/surgery/", ""));
+    return;
+  }
+  if (hash === "#/surgeries/collected") {
+    renderSurgeriesPage("collected");
+    return;
+  }
+  if (hash === "#/surgeries") {
+    renderSurgeriesPage("active");
+    return;
+  }
   if (hash.startsWith("#/record/")) {
     await renderDetailPage(hash.replace("#/record/", ""));
     return;

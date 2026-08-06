@@ -180,6 +180,8 @@ records/
 assets/
 ```
 
+Notebook and surgery metadata are both stored as individual JSON files in `records/`. Surgery-card and collection photos use the same private per-record folders under `assets/`; no additional Drive folder setup or backend deployment is required for the Surgeries feature.
+
 ## Recovery and Deletion Policy
 
 The app uses soft deletion. When a user deletes a record, the record JSON remains in Drive and gets a `deletedAt` timestamp. Users can restore it from `Show deleted records`.

@@ -30,6 +30,21 @@ Each row is one record. Depending on how the section was configured, columns can
 
 Use the search box to find records across visible sections. Use `Sync` to pull the newest version from Drive, especially when several people are editing around the same time.
 
+## Surgery Cards and Collected Samples
+
+Open `Surgeries` from the top navigation. The page has two views:
+
+- `Active surgeries` contains procedures that have not been terminated.
+- `Collected samples` contains procedures whose termination and tissue collection have been recorded.
+
+For a new procedure, click `Take picture` on a phone. The app requests the rear camera so you can photograph the completed surgery card immediately. Confirm the photo, add a surgery name, review the surgery date (today is selected by default), and add any surgical notes. You can also choose existing photos or use `Add manually` when no card image is available.
+
+Open a surgery to edit its name, date, or notes and to attach more card photos. Click a photo to inspect it at full size.
+
+When the animal is euthanized and tissue is collected, open the active surgery and click `Terminate & collect`. Confirm the termination date (today is selected by default), add termination or collection notes, and attach any relevant photos. Saving moves the procedure to `Collected samples`. Collection details and additional photos can still be added later.
+
+In the hosted app, Drive must be connected before surgery records can be added or edited. This prevents important card photos from remaining only in temporary browser storage.
+
 ## Create a Record
 
 1. Find the section where the record belongs.
@@ -105,7 +120,7 @@ Sections use the same recovery principle: deleting one adds a deletion timestamp
 
 Use `Backup` to export or import a JSON snapshot of the notebook. This is useful for manual snapshots or moving local data into the hosted notebook.
 
-In Drive mode, uploaded media files stay in Drive. The backup stores references to those files.
+In Drive mode, uploaded media files, surgery cards, and collection photos stay in Drive. The backup stores references to those files.
 
 ## Collaboration Tips
 
