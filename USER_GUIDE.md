@@ -1,6 +1,6 @@
-# Definitely not Notion User Guide
+# INFUS Notebook User Guide
 
-Definitely not Notion is a shared lab notebook for organizing experiments, meeting notes, protocols, and other project records. It is intentionally simpler than Notion: the main view is a set of tables, and each table row opens into a rich notebook page.
+INFUS Notebook is a shared lab notebook for organizing experiments, meeting notes, protocols, and other project records. It is intentionally straightforward: the main view is a set of tables, and each table row opens into a rich notebook page.
 
 ## Open the App
 
@@ -28,7 +28,7 @@ Each row is one record. Depending on how the section was configured, columns can
 - Summary
 - Custom fields such as owner, project, batch, instrument, sample, or priority
 
-Use the search box to find records across visible sections. Use `Sync now` to pull the newest version from Drive, especially when several people are editing around the same time.
+Use the search box to find records across visible sections. Use `Sync` to pull the newest version from Drive, especially when several people are editing around the same time.
 
 ## Create a Record
 
@@ -37,7 +37,7 @@ Use the search box to find records across visible sections. Use `Sync now` to pu
 3. Fill in the title and any available fields.
 4. Save the record.
 
-Click the row title to open the full detail page.
+Click anywhere on a row to open the full detail page.
 
 ## Edit a Record Page
 
@@ -51,7 +51,7 @@ Common things to add:
 - Results, images, videos, and interpretation
 - Next steps or follow-up questions
 
-The editor saves automatically. Watch the save indicator near the top of the page. If it says `Saving...`, wait a moment before closing. If it says `Sync needed` or `Save failed`, click `Sync now` and check whether another user changed the same record.
+The editor saves automatically. Watch the save indicator near the top of the page. If it says `Saving...`, wait a moment before closing. If it says `Sync needed` or `Save failed`, click `Sync` and check whether another user changed the same record.
 
 ## Add Images and Videos
 
@@ -107,7 +107,7 @@ In Drive mode, uploaded media files stay in Drive. The backup stores references 
 
 ## Collaboration Tips
 
-- Click `Sync now` before starting a long editing session.
+- Click `Sync` before starting a long editing session.
 - Avoid having two people edit the same record at the same time.
 - Use labels consistently for projects, assays, organisms, and owners.
 - Put final conclusions near the top of long records so they are easy to scan later.
@@ -119,7 +119,7 @@ If you cannot sign in, make sure you are using the exact Google account the admi
 
 If the app asks you to reconnect, click `Connect Drive` again.
 
-If a record or image seems missing, click `Sync now` and refresh the page.
+If a record or image seems missing, click `Sync` and refresh the page.
 
 If an upload fails, try a smaller file. If that also fails, send the admin the error message.
 

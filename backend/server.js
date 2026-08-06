@@ -80,7 +80,7 @@ app.put("/config", async (req, res, next) => {
   try {
     const workspace = await ensureWorkspace(req.body?.taxonomy);
     const updated = await driveUpdateJson(workspace.configFileId, {
-      app: "Definitely not Notion",
+      app: "INFUS Notebook",
       version: 1,
       updatedAt: new Date().toISOString(),
       taxonomy: req.body?.taxonomy || {},
@@ -254,7 +254,7 @@ async function ensureWorkspace(seedTaxonomy = null) {
 
   if (!configFile) {
     configFile = await driveCreateJson(DRIVE_FOLDER_ID, DRIVE_CONFIG_NAME, {
-      app: "Definitely not Notion",
+      app: "INFUS Notebook",
       version: 1,
       updatedAt: new Date().toISOString(),
       taxonomy: seedTaxonomy || {},

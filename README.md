@@ -1,4 +1,4 @@
-# Definitely not Notion
+# INFUS Notebook
 
 A lightweight lab notebook prototype for tracking project records in separate notebook sections. Each section has its own table, columns, and rich detail pages with formatted text, lists, links, images, and videos.
 

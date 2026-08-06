@@ -1,6 +1,6 @@
 # Privacy
 
-Definitely not Notion is a static lab notebook app. It does not include a hosted application server, analytics service, or advertising tracker.
+INFUS Notebook is a static lab notebook app. It does not include a hosted application server, analytics service, or advertising tracker.
 
 ## What the app stores
 

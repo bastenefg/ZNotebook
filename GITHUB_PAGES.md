@@ -81,4 +81,4 @@ Confirm:
 - Records load after reconnecting Drive.
 - A second approved user can see the same records.
 - Images and videos load after refresh.
-- `Sync now` pulls changes from another browser.
+- `Sync` pulls changes from another browser.

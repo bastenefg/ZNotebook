@@ -1,6 +1,6 @@
-# Definitely not Notion Admin Guide
+# INFUS Notebook Admin Guide
 
-This guide is for operating the hosted ZNotebook app. Keep private values such as client secrets and refresh tokens out of GitHub, chat, screenshots, and shared docs.
+This guide is for operating the hosted INFUS Notebook app. Keep private values such as client secrets and refresh tokens out of GitHub, chat, screenshots, and shared docs.
 
 ## Current Deployment
 

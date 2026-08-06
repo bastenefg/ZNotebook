@@ -19,7 +19,7 @@ const DEFAULT_OUTCOMES = [
 ];
 
 const DEFAULT_FIELD_LABELS = {
-  appName: "Definitely not Notion",
+  appName: "INFUS Notebook",
   notebook: "Notebook",
   details: "Details",
   title: "Title",
@@ -60,6 +60,12 @@ const BUILTIN_COLUMNS = {
 
 const ICONS = {
   add: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`,
+  arrowLeft: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>`,
+  close: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>`,
+  drive: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14.5 8.5 6h7l4.5 8.5"/><path d="M4 14.5 7 20h10l3-5.5z"/><path d="M8.5 6 12 14.5 15.5 6"/></svg>`,
+  fileText: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>`,
+  refresh: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-5V2"/><path d="M20 7a9 9 0 1 0 2 8"/></svg>`,
+  search: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>`,
   settings: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.8 1.8 0 0 0-2-.4 1.8 1.8 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.8 1.8 0 0 0-1-1.6 1.8 1.8 0 0 0-2 .4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.8 1.8 0 0 0 .4-2 1.8 1.8 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.8 1.8 0 0 0 1.6-1 1.8 1.8 0 0 0-.4-2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.8 1.8 0 0 0 2 .4 1.8 1.8 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.8 1.8 0 0 0 1 1.6 1.8 1.8 0 0 0 2-.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.8 1.8 0 0 0-.4 2 1.8 1.8 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.1a1.8 1.8 0 0 0-1.5 1z"/></svg>`,
   backup: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7"/><path d="M4 7l2-3h12l2 3"/><path d="M9 14l3 3 3-3"/><path d="M12 10v7"/></svg>`,
   download: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>`,
@@ -120,10 +126,7 @@ function defaultSection(name = "Experiment") {
 function loadTaxonomy() {
   try {
     const saved = JSON.parse(localStorage.getItem(TAXONOMY_KEY) || "{}");
-    const labels = saved.labels && typeof saved.labels === "object" ? saved.labels : {};
-    delete labels.recordSingular;
-    delete labels.recordPlural;
-    delete labels.record;
+    const labels = normalizeSavedLabels(saved.labels);
 
     let sections = Array.isArray(saved.sections)
       ? saved.sections.map(normalizeSection).filter(Boolean)
@@ -161,6 +164,17 @@ function loadTaxonomy() {
       sections: [defaultSection()],
     };
   }
+}
+
+function normalizeSavedLabels(value) {
+  const labels = value && typeof value === "object" ? { ...value } : {};
+  if (String(labels.appName || "").trim() === "Definitely not Notion") {
+    delete labels.appName;
+  }
+  delete labels.recordSingular;
+  delete labels.recordPlural;
+  delete labels.record;
+  return labels;
 }
 
 function normalizeSection(section) {
@@ -258,7 +272,7 @@ function normalizeTaxonomyOptions(options) {
 
 function normalizeBackupTaxonomy(value) {
   const source = value && typeof value === "object" ? value : {};
-  const labels = source.labels && typeof source.labels === "object" ? source.labels : {};
+  const labels = normalizeSavedLabels(source.labels);
   const importedSections = Array.isArray(source.sections)
     ? source.sections.map(normalizeSection).filter(Boolean)
     : [];
@@ -691,23 +705,28 @@ function renderShell(content) {
   app.innerHTML = `
     <header class="topbar">
       <a class="brand" href="#/" aria-label="${escapeHtml(term("appName"))} home">
-        <span class="brand-mark">DN</span>
+        <span class="brand-mark" aria-hidden="true">INFUS</span>
         <span class="brand-text">
           <span class="brand-name">${escapeHtml(term("appName"))}</span>
           <span class="brand-subtitle">${escapeHtml(term("notebook"))}</span>
         </span>
       </a>
       <div class="topbar-actions">
-        <span class="storage-state">${escapeHtml(driveState.status)}</span>
+        <span class="storage-state ${driveState.connected ? "is-connected" : ""}" role="status" aria-live="polite">
+          <span class="storage-dot" aria-hidden="true"></span>
+          ${escapeHtml(driveState.status)}
+        </span>
         ${
           driveState.connected
-            ? `<button class="btn ghost" type="button" data-action="drive-sync">Sync now</button>`
+            ? `<button class="btn ghost topbar-button" type="button" title="Sync notebook" data-action="drive-sync">${ICONS.refresh}<span class="action-label">Sync</span></button>`
             : ""
         }
-        <button class="btn ghost" type="button" data-action="backup">${ICONS.backup} Backup</button>
-        <button class="btn ghost" type="button" data-action="drive-settings">${
+        <button class="btn ghost topbar-button" type="button" title="Backup notebook" data-action="backup">${ICONS.backup}<span class="action-label">Backup</span></button>
+        <button class="btn drive-action ${driveState.connected ? "ghost" : "primary"}" type="button" title="${
           driveState.connected ? "Drive settings" : "Connect Drive"
-        }</button>
+        }" data-action="drive-settings">${ICONS.drive}<span class="action-label">${
+          driveState.connected ? "Drive settings" : "Connect Drive"
+        }</span></button>
       </div>
     </header>
     ${content}
@@ -746,10 +765,13 @@ function renderListPage() {
         </div>
       </section>
 
-      <section class="panel filters" aria-label="Notebook search">
-        <input class="field" type="search" placeholder="Search all sections" value="${escapeHtml(
-          currentFilters.search,
-        )}" data-filter="search" />
+      <section class="filters" aria-label="Notebook search and filters">
+        <div class="search-control">
+          ${ICONS.search}
+          <input class="field" type="search" aria-label="Search all sections" placeholder="Search all sections" value="${escapeHtml(
+            currentFilters.search,
+          )}" data-filter="search" />
+        </div>
         <label class="filter-toggle">
           <input type="checkbox" data-filter="show-deleted" ${
             currentFilters.showDeleted ? "checked" : ""
@@ -781,6 +803,13 @@ function renderListPage() {
       removeColumn(button.dataset.sectionId, button.dataset.columnId),
     );
   });
+  app.querySelectorAll("[data-record-href]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("a, button, input, select, textarea")) return;
+      if (window.getSelection()?.toString()) return;
+      location.hash = row.dataset.recordHref;
+    });
+  });
   app.querySelector("[data-filter='search']").addEventListener("input", (event) => {
     currentFilters.search = event.target.value;
     renderListPage();
@@ -796,12 +825,13 @@ function renderListPage() {
 
 function renderSectionTable(section) {
   const rows = sectionRecords(section);
+  const recordCount = `${rows.length} ${rows.length === 1 ? "record" : "records"}`;
   return `
     <section class="section-block">
       <div class="section-heading">
         <div>
           <h2>${escapeHtml(section.name)}</h2>
-          <span class="save-state">${rows.length} records</span>
+          <span class="save-state">${recordCount}</span>
         </div>
         <div class="section-actions">
           <button class="btn ghost" type="button" data-action="add-column" data-section-id="${escapeHtml(
@@ -817,7 +847,20 @@ function renderSectionTable(section) {
         ${
           rows.length
             ? renderRecordsTable(section, rows)
-            : `<div class="empty compact-empty"><div><strong>No records yet.</strong><span>Add a new item or change the search.</span></div></div>`
+            : `<div class="empty compact-empty">
+                <div class="empty-icon">${ICONS.fileText}</div>
+                <div>
+                  <strong>${currentFilters.search ? "No matching records" : "No records yet"}</strong>
+                  <span>${currentFilters.search ? "Try a different search." : "Create the first record in this section."}</span>
+                </div>
+                ${
+                  currentFilters.search
+                    ? ""
+                    : `<button class="btn primary" type="button" data-action="new-record" data-section-id="${escapeHtml(
+                        section.id,
+                      )}">${ICONS.add} New</button>`
+                }
+              </div>`
         }
       </div>
     </section>
@@ -829,9 +872,9 @@ function renderRecordsTable(section, rows) {
     <table class="experiments-table">
       <thead>
         <tr>
-          <th>${escapeHtml(section.name)}</th>
+          <th scope="col">${escapeHtml(section.name)}</th>
           ${section.columns.map((column) => renderColumnHeader(section, column)).join("")}
-          <th>${escapeHtml(term("updated"))}</th>
+          <th scope="col">${escapeHtml(term("updated"))}</th>
         </tr>
       </thead>
       <tbody>
@@ -843,7 +886,7 @@ function renderRecordsTable(section, rows) {
 
 function renderColumnHeader(section, column) {
   return `
-    <th class="managed-th">
+    <th class="managed-th" scope="col">
       <span>${escapeHtml(column.label)}</span>
       <button class="column-action" type="button" title="Remove ${escapeHtml(
         column.label,
@@ -857,9 +900,13 @@ function renderColumnHeader(section, column) {
 function renderRecordRow(section, experiment) {
   const deleted = isDeletedRecord(experiment);
   return `
-    <tr class="experiment-row ${deleted ? "deleted-record" : ""}">
-      <td>
-        <a class="row-link" href="#/record/${experiment.id}">${escapeHtml(experiment.title)}</a>
+    <tr class="experiment-row ${deleted ? "deleted-record" : ""}" data-record-href="#/record/${escapeHtml(
+      experiment.id,
+    )}">
+      <td data-label="${escapeHtml(section.name)}">
+        <a class="row-link" href="#/record/${escapeHtml(experiment.id)}">${escapeHtml(
+          experiment.title,
+        )}</a>
         ${deleted ? `<span class="deleted-badge">Deleted</span>` : ""}
         <span class="row-note">${escapeHtml(
           deleted
@@ -867,8 +914,13 @@ function renderRecordRow(section, experiment) {
             : experiment.summary || stripHtml(experiment.content) || "No notes yet",
         )}</span>
       </td>
-      ${section.columns.map((column) => `<td>${renderColumnValue(column, experiment)}</td>`).join("")}
-      <td>${formatUpdated(experiment.updatedAt)}</td>
+      ${section.columns
+        .map(
+          (column) =>
+            `<td data-label="${escapeHtml(column.label)}">${renderColumnValue(column, experiment)}</td>`,
+        )
+        .join("")}
+      <td data-label="${escapeHtml(term("updated"))}">${formatUpdated(experiment.updatedAt)}</td>
     </tr>
   `;
 }
@@ -906,7 +958,9 @@ function renderLabels(labels, removable) {
             removable
               ? `<button type="button" title="Remove ${escapeHtml(
                   label,
-                )}" data-label-remove="${escapeHtml(label)}">x</button>`
+                )}" aria-label="Remove ${escapeHtml(label)}" data-label-remove="${escapeHtml(
+                  label,
+                )}">${ICONS.close}</button>`
               : ""
           }
         </span>
@@ -948,10 +1002,10 @@ async function renderDetailPage(id) {
             activeExperiment.title,
           )}" aria-label="${escapeHtml(term("title"))}" data-field="title" />
         </div>
-        <div class="topbar-actions">
-          <span class="save-state" data-save-state>Saved</span>
+        <div class="page-actions">
+          <span class="save-state" data-save-state role="status" aria-live="polite">Saved</span>
           <button class="btn ghost" type="button" data-action="export-current">${ICONS.print} Export</button>
-          <a class="btn ghost" href="#/" title="Back to sections">Back</a>
+          <a class="btn ghost" href="#/" title="Back to sections">${ICONS.arrowLeft} Back</a>
         </div>
       </section>
 
@@ -1744,6 +1798,9 @@ function wireDialogClose(dialog) {
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.remove();
   });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") dialog.remove();
+  });
 }
 
 function openDriveDialog() {
@@ -1867,7 +1924,7 @@ async function exportNotebookBackup() {
     }
 
     const backup = {
-      app: "Definitely not Notion",
+      app: "INFUS Notebook",
       version: 1,
       exportedAt: now(),
       taxonomy,
@@ -1877,7 +1934,7 @@ async function exportNotebookBackup() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `definitely-not-notion-backup-${today()}.json`;
+    link.download = `infus-notebook-backup-${today()}.json`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -2082,10 +2139,7 @@ async function applyWorkspaceSnapshot(workspace) {
     taxonomy = {
       statuses: Array.isArray(workspace.taxonomy.statuses) ? workspace.taxonomy.statuses : [],
       outcomes: Array.isArray(workspace.taxonomy.outcomes) ? workspace.taxonomy.outcomes : [],
-      labels:
-        workspace.taxonomy.labels && typeof workspace.taxonomy.labels === "object"
-          ? workspace.taxonomy.labels
-          : {},
+      labels: normalizeSavedLabels(workspace.taxonomy.labels),
       sections: Array.isArray(workspace.taxonomy.sections)
         ? workspace.taxonomy.sections.map(normalizeSection).filter(Boolean)
         : [defaultSection()],
