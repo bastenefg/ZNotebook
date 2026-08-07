@@ -37,6 +37,8 @@ Open `Surgeries` from the top navigation. The page has two views:
 - `Active surgeries` contains procedures that have not been terminated. Enter a desired endpoint in calendar days when adding or editing a surgery; the app calculates and displays its planned termination date in the active list.
 - `Collected samples` contains procedures whose termination and tissue collection have been recorded. Each entry clearly shows the number of calendar days from surgery to collection.
 
+Use `Sort by` in either view to order records by `Date performed` or `Termination date`, then use the adjacent arrow button to switch between latest and earliest dates first. In Active surgeries, termination sorting uses the calculated planned termination date and leaves unscheduled procedures at the end. In Collected samples, it uses the recorded termination date.
+
 For a new procedure, click `Take picture` on a phone. The app requests the rear camera so you can photograph the completed surgery card immediately. Confirm the photo, add a surgery name, review the surgery date (today is selected by default), enter the desired endpoint in days when known, and add any surgical notes. You can also choose existing photos or use `Add manually` when no card image is available.
 
 Open an active surgery to edit its name, surgery date, desired endpoint, or notes and to attach more card photos. Changing the surgery date or endpoint immediately updates the planned termination preview. Click a photo to inspect it at full size.

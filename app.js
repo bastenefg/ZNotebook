@@ -63,8 +63,10 @@ const BUILTIN_COLUMNS = {
 
 const ICONS = {
   add: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`,
+  arrowDown: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>`,
   arrowLeft: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>`,
   arrowRight: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`,
+  arrowUp: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>`,
   close: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>`,
   drive: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14.5 8.5 6h7l4.5 8.5"/><path d="M4 14.5 7 20h10l3-5.5z"/><path d="M8.5 6 12 14.5 15.5 6"/></svg>`,
   fileText: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>`,
@@ -106,7 +108,11 @@ let activeExperiment = null;
 let activeSurgery = null;
 let saveTimer = null;
 let currentFilters = { search: "", showDeleted: false, showDeletedSections: false };
-let surgeryFilters = { search: "" };
+let surgeryFilters = {
+  search: "",
+  sortBy: { active: "performed", collected: "termination" },
+  sortDirection: { active: "desc", collected: "desc" },
+};
 let taxonomy = loadTaxonomy();
 let driveSettings = loadDriveSettings();
 let driveState = {
@@ -1363,6 +1369,32 @@ function surgeryMatchesSearch(record, query) {
     .includes(query);
 }
 
+function surgerySortDate(record, view, sortBy) {
+  if (sortBy === "termination") {
+    return view === "collected"
+      ? record.terminationDate
+      : calculatePlannedTerminationDate(record.surgeryDate, record.plannedEndpointDays);
+  }
+  return record.surgeryDate;
+}
+
+function compareSurgeryRecords(a, b, view, sortBy, direction) {
+  const aDate = surgerySortDate(a, view, sortBy);
+  const bDate = surgerySortDate(b, view, sortBy);
+  if (aDate && !bDate) return -1;
+  if (!aDate && bDate) return 1;
+
+  const dateOrder =
+    direction === "asc"
+      ? (aDate || "").localeCompare(bDate || "")
+      : (bDate || "").localeCompare(aDate || "");
+  return (
+    dateOrder ||
+    (b.updatedAt || "").localeCompare(a.updatedAt || "") ||
+    a.title.localeCompare(b.title)
+  );
+}
+
 function renderSurgeryPhotoImage(photo, className = "") {
   const normalized = normalizeSurgeryPhoto(photo);
   if (!normalized) return "";
@@ -1464,13 +1496,11 @@ function renderSurgeriesPage(view = "active") {
   const collectedRecords = allSurgeries.filter((record) => Boolean(record.terminationDate));
   const sourceRecords = selectedView === "collected" ? collectedRecords : activeRecords;
   const query = surgeryFilters.search.trim().toLowerCase();
+  const sortBy = surgeryFilters.sortBy[selectedView] === "termination" ? "termination" : "performed";
+  const sortDirection = surgeryFilters.sortDirection[selectedView] === "asc" ? "asc" : "desc";
   const visibleRecords = sourceRecords
     .filter((record) => surgeryMatchesSearch(record, query))
-    .sort((a, b) => {
-      const aDate = selectedView === "collected" ? a.terminationDate : a.surgeryDate;
-      const bDate = selectedView === "collected" ? b.terminationDate : b.surgeryDate;
-      return (bDate || "").localeCompare(aDate || "") || b.updatedAt.localeCompare(a.updatedAt);
-    });
+    .sort((a, b) => compareSurgeryRecords(a, b, selectedView, sortBy, sortDirection));
 
   renderShell(`
     <main class="page surgeries-page">
@@ -1502,11 +1532,27 @@ function renderSurgeriesPage(view = "active") {
             <span>Collected samples</span><strong>${collectedRecords.length}</strong>
           </a>
         </nav>
-        <div class="search-control surgery-search">
-          ${ICONS.search}
-          <input class="field" type="search" aria-label="Search surgeries" placeholder="Search surgeries" value="${escapeHtml(
-            surgeryFilters.search,
-          )}" data-surgery-search />
+        <div class="surgery-list-tools">
+          <div class="search-control surgery-search">
+            ${ICONS.search}
+            <input class="field" type="search" aria-label="Search surgeries" placeholder="Search surgeries" value="${escapeHtml(
+              surgeryFilters.search,
+            )}" data-surgery-search />
+          </div>
+          <div class="surgery-sort-control">
+            <label class="surgery-sort-label" for="surgerySort">Sort by</label>
+            <select id="surgerySort" class="select" data-surgery-sort>
+              <option value="performed" ${sortBy === "performed" ? "selected" : ""}>Date performed</option>
+              <option value="termination" ${sortBy === "termination" ? "selected" : ""}>Termination date</option>
+            </select>
+            <button class="icon-btn" type="button" title="${
+              sortDirection === "desc" ? "Latest dates first" : "Earliest dates first"
+            }" aria-label="${
+              sortDirection === "desc" ? "Sort latest dates first" : "Sort earliest dates first"
+            }" data-surgery-sort-direction>${
+              sortDirection === "desc" ? ICONS.arrowDown : ICONS.arrowUp
+            }</button>
+          </div>
         </div>
       </section>
 
@@ -1553,6 +1599,17 @@ function renderSurgeriesPage(view = "active") {
     const search = app.querySelector("[data-surgery-search]");
     search.focus();
     search.setSelectionRange(search.value.length, search.value.length);
+  });
+  app.querySelector("[data-surgery-sort]").addEventListener("change", (event) => {
+    surgeryFilters.sortBy[selectedView] =
+      event.target.value === "termination" ? "termination" : "performed";
+    renderSurgeriesPage(selectedView);
+    app.querySelector("[data-surgery-sort]").focus();
+  });
+  app.querySelector("[data-surgery-sort-direction]").addEventListener("click", () => {
+    surgeryFilters.sortDirection[selectedView] = sortDirection === "desc" ? "asc" : "desc";
+    renderSurgeriesPage(selectedView);
+    app.querySelector("[data-surgery-sort-direction]").focus();
   });
   bindSurgeryStorageNotice();
   hydrateDriveMedia(app.querySelector(".surgeries-page"));

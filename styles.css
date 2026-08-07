@@ -922,6 +922,7 @@ h1 {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 18px;
   margin-bottom: 14px;
 }
@@ -989,7 +990,35 @@ h1 {
 }
 
 .surgery-search {
-  width: min(340px, 100%);
+  width: min(320px, 100%);
+  flex: 1 1 240px;
+}
+
+.surgery-list-tools {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  flex: 1 1 520px;
+  gap: 10px;
+  min-width: 0;
+}
+
+.surgery-sort-control {
+  display: grid;
+  grid-template-columns: auto 168px 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.surgery-sort-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.surgery-sort-control .select {
+  min-height: 38px;
 }
 
 .surgery-list {
@@ -1947,6 +1976,17 @@ h1 {
 
   .surgery-search {
     width: 100%;
+  }
+
+  .surgery-list-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    flex: none;
+  }
+
+  .surgery-sort-control {
+    grid-template-columns: auto minmax(0, 1fr) 34px;
   }
 
   .view-tabs {
