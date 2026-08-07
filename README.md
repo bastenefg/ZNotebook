@@ -38,7 +38,7 @@ The `Backup` button exports/imports a JSON snapshot for local fallback or manual
 
 Individual records have an `Export` button that opens a simple report view and the browser print dialog, which can be saved as PDF.
 
-Record deletion is intentionally soft. Deleted records disappear from normal tables but remain stored as JSON in Drive with a `deletedAt` timestamp. Use `Show deleted records` and `Restore` to recover them.
+Record deletion is intentionally soft. Deleted notebook and surgery records disappear from normal lists but remain stored as JSON in Drive with a `deletedAt` timestamp; their media files are left untouched. Use the corresponding `Show deleted` filter and `Restore` action to recover them.
 
 Section deletion is also soft. A deleted section remains in the shared configuration with a `deletedAt` timestamp, and its record files are left untouched. Use `Show deleted sections` and `Restore section` to recover it.
 

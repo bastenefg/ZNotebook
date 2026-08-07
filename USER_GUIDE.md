@@ -43,6 +43,8 @@ For a new procedure, click `Take picture` on a phone. The app requests the rear 
 
 Open an active surgery to edit its name, surgery date, desired endpoint, or notes and to attach more card photos. Changing the surgery date or endpoint immediately updates the planned termination preview. Click a photo to inspect it at full size.
 
+To remove a surgery created by mistake, open it and click `Delete surgery`. The procedure disappears from its normal list, but its details and photos are retained in Drive. Use `Show deleted` in the corresponding Active surgeries or Collected samples view, open the deleted surgery, and click `Restore surgery` to recover it.
+
 When an active surgery reaches two calendar days before its planned termination date, a reminder appears below the top navigation throughout both Notebook and Surgeries. The reminder also identifies procedures due today or overdue. Click a surgery name to open it, or use the close button to dismiss the currently listed surgery/date reminders on that browser. Newly due surgeries and changed planned dates can still trigger a new reminder.
 
 When the animal is euthanized and tissue is collected, open the active surgery and click `Terminate & collect`. Confirm the termination date (today is selected by default), add termination or collection notes, and attach any relevant photos. Saving moves the procedure to `Collected samples`. Collection details and additional photos can still be added later.
@@ -110,13 +112,13 @@ The app opens a simple report view and your browser print dialog. Choose `Save a
 
 ## Deleted Records
 
-Deleting a record hides it from normal tables, but the data is intentionally kept in Drive with a deletion timestamp.
+Deleting a notebook record or surgery hides it from normal lists, but the data is intentionally kept in Drive with a deletion timestamp. Surgery card and collection photos are also retained.
 
 To recover a deleted record:
 
-1. Enable `Show deleted records`.
+1. Enable `Show deleted records` for notebook records, or `Show deleted` in the relevant surgery view.
 2. Open the deleted record.
-3. Click `Restore`.
+3. Click `Restore` or `Restore surgery`.
 
 Sections use the same recovery principle: deleting one adds a deletion timestamp to the shared configuration while leaving all of its record files untouched. This soft-delete behavior is there to protect the team from accidental deletions.
 

@@ -110,6 +110,7 @@ let saveTimer = null;
 let currentFilters = { search: "", showDeleted: false, showDeletedSections: false };
 let surgeryFilters = {
   search: "",
+  showDeleted: false,
   sortBy: { active: "performed", collected: "termination" },
   sortDirection: { active: "desc", collected: "desc" },
 };
@@ -1320,9 +1321,9 @@ function renderColumnValue(column, experiment) {
   return escapeHtml(String(value));
 }
 
-function surgeryRecords() {
+function surgeryRecords({ includeDeleted = false } = {}) {
   return experiments.filter(
-    (record) => isSurgeryRecord(record) && !isDeletedRecord(record),
+    (record) => isSurgeryRecord(record) && (includeDeleted || !isDeletedRecord(record)),
   );
 }
 
@@ -1418,6 +1419,7 @@ function renderSurgeryThumbnail(record) {
 }
 
 function renderSurgeryRow(record, collected) {
+  const deleted = isDeletedRecord(record);
   const surgeryPhotoCount = record.surgeryPhotos.length;
   const collectionPhotoCount = record.terminationPhotos.length;
   const elapsedDays = collected
@@ -1427,17 +1429,21 @@ function renderSurgeryRow(record, collected) {
     ? ""
     : calculatePlannedTerminationDate(record.surgeryDate, record.plannedEndpointDays);
   return `
-    <a class="surgery-row" href="#/surgery/${escapeHtml(record.id)}">
+    <a class="surgery-row ${deleted ? "deleted-surgery" : ""}" href="#/surgery/${escapeHtml(
+      record.id,
+    )}">
       ${renderSurgeryThumbnail(record)}
       <div class="surgery-row-main">
         <div class="surgery-row-heading">
           <strong>${escapeHtml(record.title)}</strong>
-          <span class="pill ${collected ? "sample-collected" : "surgery-active"}">${
-            collected ? "Collected" : "Active"
-          }</span>
+          <span class="pill ${
+            deleted ? "surgery-deleted" : collected ? "sample-collected" : "surgery-active"
+          }">${deleted ? "Deleted" : collected ? "Collected" : "Active"}</span>
         </div>
         <span class="surgery-row-note">${escapeHtml(
-          record.surgeryNotes || (collected ? record.terminationNotes : "No surgical notes"),
+          deleted
+            ? `Deleted ${formatDateTime(record.deletedAt)}`
+            : record.surgeryNotes || (collected ? record.terminationNotes : "No surgical notes"),
         )}</span>
       </div>
       <dl class="surgery-row-meta">
@@ -1491,10 +1497,19 @@ function renderSurgeriesPage(view = "active") {
   activeExperiment = null;
   activeSurgery = null;
   const selectedView = view === "collected" ? "collected" : "active";
-  const allSurgeries = surgeryRecords();
-  const activeRecords = allSurgeries.filter((record) => !record.terminationDate);
-  const collectedRecords = allSurgeries.filter((record) => Boolean(record.terminationDate));
-  const sourceRecords = selectedView === "collected" ? collectedRecords : activeRecords;
+  const allSurgeries = surgeryRecords({ includeDeleted: true });
+  const liveSurgeries = allSurgeries.filter((record) => !isDeletedRecord(record));
+  const activeRecords = liveSurgeries.filter((record) => !record.terminationDate);
+  const collectedRecords = liveSurgeries.filter((record) => Boolean(record.terminationDate));
+  const deletedRecords = allSurgeries.filter(
+    (record) =>
+      isDeletedRecord(record) &&
+      (selectedView === "collected" ? Boolean(record.terminationDate) : !record.terminationDate),
+  );
+  const liveRecords = selectedView === "collected" ? collectedRecords : activeRecords;
+  const sourceRecords = surgeryFilters.showDeleted
+    ? [...liveRecords, ...deletedRecords]
+    : liveRecords;
   const query = surgeryFilters.search.trim().toLowerCase();
   const sortBy = surgeryFilters.sortBy[selectedView] === "termination" ? "termination" : "performed";
   const sortDirection = surgeryFilters.sortDirection[selectedView] === "asc" ? "asc" : "desc";
@@ -1553,6 +1568,16 @@ function renderSurgeriesPage(view = "active") {
               sortDirection === "desc" ? ICONS.arrowDown : ICONS.arrowUp
             }</button>
           </div>
+          ${
+            deletedRecords.length
+              ? `<label class="filter-toggle surgery-deleted-toggle">
+                  <input type="checkbox" data-surgery-show-deleted ${
+                    surgeryFilters.showDeleted ? "checked" : ""
+                  } />
+                  <span>Show deleted (${deletedRecords.length})</span>
+                </label>`
+              : ""
+          }
         </div>
       </section>
 
@@ -1610,6 +1635,11 @@ function renderSurgeriesPage(view = "active") {
     surgeryFilters.sortDirection[selectedView] = sortDirection === "desc" ? "asc" : "desc";
     renderSurgeriesPage(selectedView);
     app.querySelector("[data-surgery-sort-direction]").focus();
+  });
+  app.querySelector("[data-surgery-show-deleted]")?.addEventListener("change", (event) => {
+    surgeryFilters.showDeleted = event.target.checked;
+    renderSurgeriesPage(selectedView);
+    app.querySelector("[data-surgery-show-deleted]")?.focus();
   });
   bindSurgeryStorageNotice();
   hydrateDriveMedia(app.querySelector(".surgeries-page"));
@@ -1853,6 +1883,7 @@ async function renderSurgeryDetailPage(id) {
   activeExperiment = null;
   activeSurgery = normalizeSurgeryRecord(record);
   const collected = Boolean(activeSurgery.terminationDate);
+  const deleted = isDeletedRecord(activeSurgery);
   const elapsedDays = collected
     ? daysBetweenDates(activeSurgery.surgeryDate, activeSurgery.terminationDate)
     : null;
@@ -1863,25 +1894,47 @@ async function renderSurgeryDetailPage(id) {
         activeSurgery.plannedEndpointDays,
       );
   const storageLocked = surgeryStorageLocked();
+  const recordLocked = storageLocked || deleted;
   renderShell(`
     <main class="page surgery-detail-page">
       <section class="page-header surgery-detail-header">
         <div>
-          <p class="eyebrow">${collected ? "Collected sample" : "Active surgery"}</p>
+          <p class="eyebrow">${
+            deleted ? "Deleted surgery" : collected ? "Collected sample" : "Active surgery"
+          }</p>
           <div class="detail-heading-line">
             <h1>${escapeHtml(activeSurgery.title)}</h1>
-            <span class="pill ${collected ? "sample-collected" : "surgery-active"}">${
-              collected ? "Collected" : "Active"
-            }</span>
+            <span class="pill ${
+              deleted ? "surgery-deleted" : collected ? "sample-collected" : "surgery-active"
+            }">${deleted ? "Deleted" : collected ? "Collected" : "Active"}</span>
           </div>
         </div>
         <div class="page-actions">
-          <span class="save-state" data-surgery-save-state role="status" aria-live="polite">Saved</span>
+          <span class="save-state" data-surgery-save-state role="status" aria-live="polite">${
+            deleted ? "Read only" : "Saved"
+          }</span>
           <a class="btn ghost" href="${collected ? "#/surgeries/collected" : "#/surgeries"}">${ICONS.arrowLeft} Back</a>
+          ${
+            deleted
+              ? ""
+              : `<button class="btn danger" type="button" data-action="delete-surgery">${ICONS.trash} Delete surgery</button>`
+          }
         </div>
       </section>
 
       ${surgeryStorageNoticeMarkup()}
+
+      ${
+        deleted
+          ? `<section class="deleted-notice">
+              <div>
+                <strong>Deleted surgery</strong>
+                <span>This surgery is hidden from normal lists but its details and photos remain in storage.</span>
+              </div>
+              <button class="btn primary" type="button" data-action="restore-surgery">${ICONS.restore} Restore surgery</button>
+            </section>`
+          : ""
+      }
 
       <section class="surgery-detail-grid">
         <div class="surgery-photo-section">
@@ -1892,10 +1945,10 @@ async function renderSurgeryDetailPage(id) {
             </div>
             <div class="subsection-actions">
               <button class="btn ghost" type="button" data-action="choose-surgery-photo" ${
-                storageLocked ? "disabled" : ""
+                recordLocked ? "disabled" : ""
               }>${ICONS.image} Add photos</button>
               <button class="btn" type="button" data-action="capture-surgery-photo" ${
-                storageLocked ? "disabled" : ""
+                recordLocked ? "disabled" : ""
               }>${ICONS.camera} Take picture</button>
             </div>
           </div>
@@ -1909,7 +1962,7 @@ async function renderSurgeryDetailPage(id) {
           <div class="field-group">
             <label class="field-label" for="detailSurgeryName">Surgery name</label>
             <input id="detailSurgeryName" class="field" name="title" required ${
-              storageLocked ? "disabled" : ""
+              recordLocked ? "disabled" : ""
             } value="${escapeHtml(
               activeSurgery.title,
             )}" />
@@ -1917,7 +1970,7 @@ async function renderSurgeryDetailPage(id) {
           <div class="field-group">
             <label class="field-label" for="detailSurgeryDate">Surgery date</label>
             <input id="detailSurgeryDate" class="field" name="surgeryDate" type="date" required ${
-              storageLocked ? "disabled" : ""
+              recordLocked ? "disabled" : ""
             } value="${escapeHtml(
               activeSurgery.surgeryDate,
             )}" data-surgery-date-input />
@@ -1927,7 +1980,7 @@ async function renderSurgeryDetailPage(id) {
               ? `<div class="field-group">
                   <label class="field-label" for="detailEndpointDays">Desired endpoint (days)</label>
                   <input id="detailEndpointDays" class="field" name="plannedEndpointDays" type="number" min="0" step="1" inputmode="numeric" placeholder="14" ${
-                    storageLocked ? "disabled" : ""
+                    recordLocked ? "disabled" : ""
                   } value="${escapeHtml(activeSurgery.plannedEndpointDays ?? "")}" data-endpoint-days-input />
                   <output class="planned-termination-preview" for="detailSurgeryDate detailEndpointDays">
                     <span>Planned termination</span>
@@ -1941,22 +1994,22 @@ async function renderSurgeryDetailPage(id) {
           <div class="field-group">
             <label class="field-label" for="detailSurgeryNotes">Surgical notes</label>
             <textarea id="detailSurgeryNotes" class="textarea surgery-notes-input" name="surgeryNotes" ${
-              storageLocked ? "disabled" : ""
+              recordLocked ? "disabled" : ""
             } placeholder="Procedure, animal, implant, observations, or follow-up notes">${escapeHtml(
               activeSurgery.surgeryNotes,
             )}</textarea>
           </div>
           <div class="form-actions">
-            <button class="btn primary" type="submit" ${storageLocked ? "disabled" : ""}>Save changes</button>
+            <button class="btn primary" type="submit" ${recordLocked ? "disabled" : ""}>Save changes</button>
           </div>
         </form>
       </section>
 
       <input class="hidden" type="file" accept="image/*" capture="environment" data-detail-surgery-camera ${
-        storageLocked ? "disabled" : ""
+        recordLocked ? "disabled" : ""
       } />
       <input class="hidden" type="file" accept="image/*" multiple data-detail-surgery-gallery ${
-        storageLocked ? "disabled" : ""
+        recordLocked ? "disabled" : ""
       } />
 
       ${
@@ -1968,7 +2021,7 @@ async function renderSurgeryDetailPage(id) {
                   <h2>Collected sample</h2>
                 </div>
                 <button class="btn ghost" type="button" data-action="edit-termination" ${
-                  storageLocked ? "disabled" : ""
+                  recordLocked ? "disabled" : ""
                 }>${ICONS.pencil} Edit collection details</button>
               </div>
               <div class="collection-summary">
@@ -1997,7 +2050,7 @@ async function renderSurgeryDetailPage(id) {
                 <span>Enter the termination date, notes, and any collection photos. This procedure will move to Collected samples.</span>
               </div>
               <button class="btn primary" type="button" data-action="terminate-surgery" ${
-                storageLocked ? "disabled" : ""
+                recordLocked ? "disabled" : ""
               }>Terminate &amp; collect</button>
             </section>`
       }
@@ -2008,7 +2061,7 @@ async function renderSurgeryDetailPage(id) {
   bindPlannedTerminationPreview(detailsForm);
   detailsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!requireSurgeryStorage()) return;
+    if (deleted || !requireSurgeryStorage()) return;
     const data = new FormData(detailsForm);
     const button = detailsForm.querySelector("[type='submit']");
     button.disabled = true;
@@ -2053,6 +2106,45 @@ async function renderSurgeryDetailPage(id) {
   });
   app.querySelector("[data-action='edit-termination']")?.addEventListener("click", () => {
     openTerminationDialog(activeSurgery, true);
+  });
+  app.querySelector("[data-action='delete-surgery']")?.addEventListener("click", async (event) => {
+    if (!requireSurgeryStorage()) return;
+    const confirmed = window.confirm(
+      `Delete "${activeSurgery.title}"? It will disappear from surgery lists but remain in storage for recovery.`,
+    );
+    if (!confirmed) return;
+
+    const button = event.currentTarget;
+    button.disabled = true;
+    setSurgerySaveState("Deleting...");
+    try {
+      activeSurgery = await markExperimentDeleted(activeSurgery);
+      await loadExperiments();
+      location.hash = collected ? "#/surgeries/collected" : "#/surgeries";
+    } catch (error) {
+      console.error(error);
+      button.disabled = false;
+      setSurgerySaveState("Delete failed");
+      if (driveState.connected) handleDriveError(error);
+      else window.alert(error.message || String(error));
+    }
+  });
+  app.querySelector("[data-action='restore-surgery']")?.addEventListener("click", async (event) => {
+    if (!requireSurgeryStorage()) return;
+    const button = event.currentTarget;
+    button.disabled = true;
+    setSurgerySaveState("Restoring...");
+    try {
+      activeSurgery = await restoreExperimentRecord(activeSurgery);
+      await loadExperiments();
+      await renderSurgeryDetailPage(activeSurgery.id);
+    } catch (error) {
+      console.error(error);
+      button.disabled = false;
+      setSurgerySaveState("Restore failed");
+      if (driveState.connected) handleDriveError(error);
+      else window.alert(error.message || String(error));
+    }
   });
   bindSurgeryStorageNotice();
   bindSurgeryPhotoLightbox(app.querySelector(".surgery-detail-page"));
