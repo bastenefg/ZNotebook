@@ -4,6 +4,8 @@ const STORE = "experiments";
 const TAXONOMY_KEY = "labbook-taxonomy-v1";
 const DRIVE_SETTINGS_KEY = "definitely-not-notion-drive-v1";
 const BACKEND_CREDENTIAL_KEY = "definitely-not-notion-backend-credential-v1";
+const TERMINATION_REMINDER_KEY = "infus-termination-reminders-dismissed-v1";
+const TERMINATION_REMINDER_WINDOW_DAYS = 2;
 const DEFAULT_SECTION_ID = "experiments";
 const SURGERY_SECTION_ID = "__surgeries__";
 
@@ -69,6 +71,7 @@ const ICONS = {
   refresh: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-5V2"/><path d="M20 7a9 9 0 1 0 2 8"/></svg>`,
   search: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>`,
   settings: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.8 1.8 0 0 0-2-.4 1.8 1.8 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.8 1.8 0 0 0-1-1.6 1.8 1.8 0 0 0-2 .4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.8 1.8 0 0 0 .4-2 1.8 1.8 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.8 1.8 0 0 0 1.6-1 1.8 1.8 0 0 0-.4-2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.8 1.8 0 0 0 2 .4 1.8 1.8 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.8 1.8 0 0 0 1 1.6 1.8 1.8 0 0 0 2-.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.8 1.8 0 0 0-.4 2 1.8 1.8 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.1a1.8 1.8 0 0 0-1.5 1z"/></svg>`,
+  bell: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>`,
   backup: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7"/><path d="M4 7l2-3h12l2 3"/><path d="M9 14l3 3 3-3"/><path d="M12 10v7"/></svg>`,
   download: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>`,
   upload: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M5 3h14"/></svg>`,
@@ -115,7 +118,13 @@ let driveState = {
 };
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 const now = () => new Date().toISOString();
 
 function defaultColumns() {
@@ -873,9 +882,117 @@ function sectionRecords(section) {
   });
 }
 
+function loadDismissedTerminationReminders() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TERMINATION_REMINDER_KEY) || "[]");
+    return new Set(Array.isArray(saved) ? saved.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function terminationReminderKey(record, plannedDate) {
+  return `${record.id}:${plannedDate}`;
+}
+
+function terminationReminderItems() {
+  const dismissed = loadDismissedTerminationReminders();
+  const currentDate = today();
+
+  return surgeryRecords()
+    .filter((record) => !record.terminationDate)
+    .map((record) => {
+      const plannedDate = calculatePlannedTerminationDate(
+        record.surgeryDate,
+        record.plannedEndpointDays,
+      );
+      const daysUntil = plannedDate ? daysBetweenDates(currentDate, plannedDate) : null;
+      return {
+        record,
+        plannedDate,
+        daysUntil,
+        key: plannedDate ? terminationReminderKey(record, plannedDate) : "",
+      };
+    })
+    .filter(
+      (item) =>
+        item.plannedDate &&
+        Number.isInteger(item.daysUntil) &&
+        item.daysUntil <= TERMINATION_REMINDER_WINDOW_DAYS &&
+        !dismissed.has(item.key),
+    )
+    .sort(
+      (a, b) =>
+        a.plannedDate.localeCompare(b.plannedDate) ||
+        a.record.title.localeCompare(b.record.title),
+    );
+}
+
+function terminationReminderTiming(daysUntil) {
+  if (daysUntil < -1) return `${Math.abs(daysUntil)} days overdue`;
+  if (daysUntil === -1) return "1 day overdue";
+  if (daysUntil === 0) return "Due today";
+  if (daysUntil === 1) return "Due tomorrow";
+  return `Due in ${daysUntil} days`;
+}
+
+function terminationReminderMarkup(items) {
+  if (!items.length) return "";
+  const visibleItems = items.slice(0, 4);
+  const remaining = items.length - visibleItems.length;
+  const heading =
+    items.length === 1 ? "Termination reminder" : `${items.length} termination reminders`;
+
+  return `
+    <aside class="termination-reminder" aria-label="Planned termination reminders">
+      <span class="termination-reminder-icon" aria-hidden="true">${ICONS.bell}</span>
+      <div class="termination-reminder-content">
+        <strong class="termination-reminder-title">${heading}</strong>
+        <div class="termination-reminder-items">
+          ${visibleItems
+            .map(
+              (item) => `
+                <a class="termination-reminder-item" href="#/surgery/${escapeHtml(item.record.id)}">
+                  <span class="termination-reminder-name">${escapeHtml(item.record.title)}</span>
+                  <span class="termination-reminder-meta">
+                    <span>${escapeHtml(formatDate(item.plannedDate))}</span>
+                    <span class="termination-reminder-timing ${
+                      item.daysUntil < 0 ? "is-overdue" : ""
+                    }">${escapeHtml(terminationReminderTiming(item.daysUntil))}</span>
+                  </span>
+                </a>
+              `,
+            )
+            .join("")}
+          ${
+            remaining > 0
+              ? `<a class="termination-reminder-more" href="#/surgeries">View ${remaining} more</a>`
+              : ""
+          }
+        </div>
+      </div>
+      <button class="icon-btn termination-reminder-dismiss" type="button" title="Dismiss reminders" aria-label="Dismiss termination reminders" data-action="dismiss-termination-reminders">${ICONS.close}</button>
+    </aside>
+  `;
+}
+
+function dismissTerminationReminders(items) {
+  const dismissed = loadDismissedTerminationReminders();
+  items.forEach((item) => dismissed.add(item.key));
+  try {
+    localStorage.setItem(
+      TERMINATION_REMINDER_KEY,
+      JSON.stringify(Array.from(dismissed).slice(-200)),
+    );
+  } catch {
+    // The banner can still be hidden for this render when browser storage is unavailable.
+  }
+}
+
 function renderShell(content) {
   revokeDriveObjectUrls();
   const surgeriesActive = /^#\/surger/.test(location.hash || "");
+  const terminationReminders = terminationReminderItems();
   document.title = surgeriesActive ? `Surgeries | ${term("appName")}` : term("appName");
   app.innerHTML = `
     <header class="topbar">
@@ -914,11 +1031,22 @@ function renderShell(content) {
         }</span></button>
       </div>
     </header>
+    ${
+      terminationReminders.length
+        ? `<div class="global-alerts">${terminationReminderMarkup(terminationReminders)}</div>`
+        : ""
+    }
     ${content}
   `;
   app.querySelector("[data-action='drive-settings']").addEventListener("click", openDriveDialog);
   app.querySelector("[data-action='drive-sync']")?.addEventListener("click", syncDriveNow);
   app.querySelector("[data-action='backup']").addEventListener("click", openBackupDialog);
+  app
+    .querySelector("[data-action='dismiss-termination-reminders']")
+    ?.addEventListener("click", () => {
+      dismissTerminationReminders(terminationReminders);
+      app.querySelector(".global-alerts")?.remove();
+    });
 }
 
 function revokeDriveObjectUrls() {

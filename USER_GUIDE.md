@@ -41,6 +41,8 @@ For a new procedure, click `Take picture` on a phone. The app requests the rear 
 
 Open an active surgery to edit its name, surgery date, desired endpoint, or notes and to attach more card photos. Changing the surgery date or endpoint immediately updates the planned termination preview. Click a photo to inspect it at full size.
 
+When an active surgery reaches two calendar days before its planned termination date, a reminder appears below the top navigation throughout both Notebook and Surgeries. The reminder also identifies procedures due today or overdue. Click a surgery name to open it, or use the close button to dismiss the currently listed surgery/date reminders on that browser. Newly due surgeries and changed planned dates can still trigger a new reminder.
+
 When the animal is euthanized and tissue is collected, open the active surgery and click `Terminate & collect`. Confirm the termination date (today is selected by default), add termination or collection notes, and attach any relevant photos. Saving moves the procedure to `Collected samples`. Collection details and additional photos can still be added later.
 
 In the hosted app, Drive must be connected before surgery records can be added or edited. This prevents important card photos from remaining only in temporary browser storage.

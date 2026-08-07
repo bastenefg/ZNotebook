@@ -220,6 +220,120 @@ textarea:focus-visible,
   padding: 30px clamp(18px, 3vw, 36px) 64px;
 }
 
+.global-alerts {
+  width: min(1400px, 100%);
+  margin: 0 auto;
+  padding: 18px clamp(18px, 3vw, 36px) 0;
+}
+
+.global-alerts + .page {
+  padding-top: 20px;
+}
+
+.termination-reminder {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
+  align-items: start;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid #dfc98f;
+  border-left: 4px solid var(--warning);
+  border-radius: 8px;
+  background: #fff8e7;
+  box-shadow: var(--shadow-subtle);
+}
+
+.termination-reminder-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.termination-reminder-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.termination-reminder-content {
+  min-width: 0;
+}
+
+.termination-reminder-title {
+  display: block;
+  margin: 1px 0 5px;
+  font-size: 13px;
+}
+
+.termination-reminder-items {
+  display: grid;
+  gap: 1px;
+}
+
+.termination-reminder-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 3px 0;
+  color: var(--ink);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.termination-reminder-item:hover .termination-reminder-name {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.termination-reminder-name {
+  min-width: 0;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.termination-reminder-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.termination-reminder-timing {
+  color: var(--warning);
+  font-weight: 850;
+}
+
+.termination-reminder-timing.is-overdue {
+  color: var(--danger);
+}
+
+.termination-reminder-more {
+  width: fit-content;
+  margin-top: 3px;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.termination-reminder-dismiss {
+  border-color: transparent;
+  background: transparent;
+}
+
 .page-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1979,6 +2093,37 @@ h1 {
     margin-left: auto;
     flex-wrap: nowrap;
     justify-content: flex-end;
+  }
+
+  .global-alerts {
+    padding: 12px 12px 0;
+  }
+
+  .global-alerts + .page {
+    padding-top: 18px;
+  }
+
+  .termination-reminder {
+    grid-template-columns: 30px minmax(0, 1fr) 30px;
+    gap: 9px;
+    padding: 11px 10px;
+  }
+
+  .termination-reminder-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .termination-reminder-item {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 1px;
+    padding: 4px 0;
+  }
+
+  .termination-reminder-meta {
+    justify-content: flex-start;
+    text-align: left;
   }
 
   .brand-navigation {
