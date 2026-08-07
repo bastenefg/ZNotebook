@@ -6,6 +6,8 @@ const DRIVE_SETTINGS_KEY = "definitely-not-notion-drive-v1";
 const BACKEND_CREDENTIAL_KEY = "definitely-not-notion-backend-credential-v1";
 const TERMINATION_REMINDER_KEY = "infus-termination-reminders-dismissed-v1";
 const TERMINATION_REMINDER_WINDOW_DAYS = 2;
+const EDITOR_IMAGE_MIN_WIDTH = 120;
+const EDITOR_IMAGE_MAX_STORED_WIDTH = 4096;
 const DEFAULT_SECTION_ID = "experiments";
 const SURGERY_SECTION_ID = "__surgeries__";
 
@@ -96,6 +98,8 @@ const ICONS = {
   link: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>`,
   image: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 10h.01"/><path d="M21 15l-4.5-4.5L9 18"/></svg>`,
   video: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg>`,
+  expand: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>`,
+  moveDiagonal: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19 19 5M13 5h6v6M11 19H5v-6"/></svg>`,
   undo: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14l-4-4 4-4"/><path d="M5 10h9a6 6 0 1 1 0 12h-2"/></svg>`,
   redo: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l4-4-4-4"/><path d="M19 10h-9a6 6 0 1 0 0 12h2"/></svg>`,
   removeFormat: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V5h11v2"/><path d="M9 5v7"/><path d="M12 19H5l9-9 5 5-4 4"/><path d="M5 19h14"/></svg>`,
@@ -107,6 +111,7 @@ let experiments = [];
 let activeExperiment = null;
 let activeSurgery = null;
 let saveTimer = null;
+let editorImageResizeCleanup = null;
 let currentFilters = { search: "", showDeleted: false, showDeletedSections: false };
 let surgeryFilters = {
   search: "",
@@ -379,7 +384,7 @@ function sanitizeHtml(html = "") {
       const value = attribute.value.trim();
       const allowedByTag = {
         A: ["href", "title", "target", "rel"],
-        IMG: ["src", "alt", "title", "data-drive-file-id", "data-drive-mime"],
+        IMG: ["src", "alt", "title", "width", "data-drive-file-id", "data-drive-mime"],
         VIDEO: ["src", "title", "controls", "data-drive-file-id", "data-drive-mime"],
         SOURCE: ["src", "type"],
       };
@@ -397,6 +402,19 @@ function sanitizeHtml(html = "") {
 
       if ((name === "href" || name === "src") && /^javascript:/i.test(value)) {
         element.removeAttribute(attribute.name);
+      }
+
+      if (element.tagName === "IMG" && name === "width") {
+        const width = Number(value);
+        if (
+          !Number.isInteger(width) ||
+          width < EDITOR_IMAGE_MIN_WIDTH ||
+          width > EDITOR_IMAGE_MAX_STORED_WIDTH
+        ) {
+          element.removeAttribute(attribute.name);
+        } else {
+          element.setAttribute("width", String(width));
+        }
       }
     });
 
@@ -997,6 +1015,8 @@ function dismissTerminationReminders(items) {
 }
 
 function renderShell(content) {
+  editorImageResizeCleanup?.();
+  editorImageResizeCleanup = null;
   revokeDriveObjectUrls();
   const surgeriesActive = /^#\/surger/.test(location.hash || "");
   const terminationReminders = terminationReminderItems();
@@ -2770,6 +2790,229 @@ function exportActiveExperiment(section) {
   }
 }
 
+function editorImageMaxWidth(editor, image) {
+  const contentWidth = (element) => {
+    const style = window.getComputedStyle(element);
+    const horizontalPadding =
+      (Number.parseFloat(style.paddingLeft) || 0) +
+      (Number.parseFloat(style.paddingRight) || 0);
+    return Math.max(0, element.clientWidth - horizontalPadding);
+  };
+
+  let maxWidth = contentWidth(editor);
+  const parent = image.parentElement;
+  if (parent && parent !== editor) {
+    const parentWidth = contentWidth(parent);
+    if (parentWidth) maxWidth = Math.min(maxWidth, parentWidth);
+  }
+  return Math.max(EDITOR_IMAGE_MIN_WIDTH, Math.floor(maxWidth));
+}
+
+function bindEditorImageResizing(editor) {
+  const shell = editor.closest(".editor-shell");
+  if (!shell) return;
+
+  const overlay = document.createElement("div");
+  overlay.className = "image-resize-overlay hidden";
+  overlay.setAttribute("contenteditable", "false");
+  overlay.innerHTML = `
+    <div class="image-resize-controls" role="toolbar" aria-label="Image size">
+      <output class="image-resize-size" data-image-resize-size aria-live="polite"></output>
+      <button class="icon-btn compact" type="button" title="Use original image size" aria-label="Use original image size" data-image-original-size>${ICONS.restore}</button>
+      <button class="icon-btn compact" type="button" title="Fit image to editor width" aria-label="Fit image to editor width" data-image-fit-width>${ICONS.expand}</button>
+    </div>
+    <button class="image-resize-handle" type="button" title="Drag to resize image" aria-label="Drag to resize image" data-image-resize-handle>${ICONS.moveDiagonal}</button>
+  `;
+  shell.appendChild(overlay);
+
+  const controller = new AbortController();
+  const { signal } = controller;
+  const sizeOutput = overlay.querySelector("[data-image-resize-size]");
+  const resizeHandle = overlay.querySelector("[data-image-resize-handle]");
+  const resizeObserver = new ResizeObserver(() => positionOverlay());
+  let selectedImage = null;
+  let resizing = false;
+  let resizeStartX = 0;
+  let resizeStartWidth = 0;
+
+  const renderedImageWidth = () =>
+    Math.round(selectedImage?.getBoundingClientRect().width || 0);
+
+  function positionOverlay() {
+    if (!selectedImage || !selectedImage.isConnected) {
+      clearSelection();
+      return;
+    }
+
+    const imageRect = selectedImage.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    if (!imageRect.width || !imageRect.height) {
+      overlay.classList.add("hidden");
+      return;
+    }
+
+    overlay.style.left = `${imageRect.left - shellRect.left}px`;
+    overlay.style.top = `${imageRect.top - shellRect.top}px`;
+    overlay.style.width = `${imageRect.width}px`;
+    overlay.style.height = `${imageRect.height}px`;
+    overlay.classList.remove("hidden");
+    const width = renderedImageWidth();
+    sizeOutput.textContent = `${width} px`;
+    resizeHandle.setAttribute("aria-label", `Resize image, current width ${width} pixels`);
+  }
+
+  function clearSelection() {
+    if (selectedImage) resizeObserver.unobserve(selectedImage);
+    selectedImage = null;
+    resizing = false;
+    overlay.classList.add("hidden");
+    overlay.classList.remove("is-resizing");
+  }
+
+  function selectImage(image) {
+    if (selectedImage !== image) {
+      if (selectedImage) resizeObserver.unobserve(selectedImage);
+      selectedImage = image;
+      resizeObserver.observe(selectedImage);
+    }
+    positionOverlay();
+  }
+
+  function commitImageSize() {
+    if (!selectedImage) return;
+    activeExperiment.content = editor.innerHTML;
+    scheduleSave();
+  }
+
+  function setImageWidth(width) {
+    if (!selectedImage) return;
+    const maxWidth = editorImageMaxWidth(editor, selectedImage);
+    const nextWidth = Math.round(
+      Math.min(maxWidth, Math.max(EDITOR_IMAGE_MIN_WIDTH, width)),
+    );
+    selectedImage.style.removeProperty("width");
+    selectedImage.style.removeProperty("height");
+    selectedImage.removeAttribute("height");
+    selectedImage.setAttribute("width", String(nextWidth));
+    positionOverlay();
+  }
+
+  function finishResize(event) {
+    if (!resizing) return;
+    resizing = false;
+    overlay.classList.remove("is-resizing");
+    if (resizeHandle.hasPointerCapture?.(event.pointerId)) {
+      resizeHandle.releasePointerCapture(event.pointerId);
+    }
+    commitImageSize();
+  }
+
+  editor.addEventListener(
+    "click",
+    (event) => {
+      const image = event.target.closest?.("img");
+      if (image && editor.contains(image)) {
+        event.preventDefault();
+        selectImage(image);
+      } else {
+        clearSelection();
+      }
+    },
+    { signal },
+  );
+  editor.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Escape") clearSelection();
+    },
+    { signal },
+  );
+  editor.addEventListener(
+    "load",
+    (event) => {
+      if (event.target === selectedImage) positionOverlay();
+    },
+    { capture: true, signal },
+  );
+  editor.addEventListener("input", () => window.requestAnimationFrame(positionOverlay), { signal });
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!selectedImage || overlay.contains(event.target) || event.target === selectedImage) return;
+      if (!editor.contains(event.target)) clearSelection();
+    },
+    { capture: true, signal },
+  );
+  window.addEventListener("resize", positionOverlay, { signal });
+
+  resizeHandle.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!selectedImage) return;
+      event.preventDefault();
+      event.stopPropagation();
+      resizing = true;
+      resizeStartX = event.clientX;
+      resizeStartWidth = renderedImageWidth();
+      overlay.classList.add("is-resizing");
+      resizeHandle.setPointerCapture?.(event.pointerId);
+    },
+    { signal },
+  );
+  resizeHandle.addEventListener(
+    "pointermove",
+    (event) => {
+      if (!resizing) return;
+      event.preventDefault();
+      setImageWidth(resizeStartWidth + event.clientX - resizeStartX);
+    },
+    { signal },
+  );
+  resizeHandle.addEventListener("pointerup", finishResize, { signal });
+  resizeHandle.addEventListener("pointercancel", finishResize, { signal });
+  resizeHandle.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const step = event.shiftKey ? 1 : 16;
+      setImageWidth(renderedImageWidth() + (event.key === "ArrowRight" ? step : -step));
+      commitImageSize();
+    },
+    { signal },
+  );
+
+  overlay.querySelector("[data-image-original-size]").addEventListener(
+    "click",
+    () => {
+      if (!selectedImage) return;
+      selectedImage.removeAttribute("width");
+      selectedImage.removeAttribute("height");
+      selectedImage.style.removeProperty("width");
+      selectedImage.style.removeProperty("height");
+      window.requestAnimationFrame(positionOverlay);
+      commitImageSize();
+    },
+    { signal },
+  );
+  overlay.querySelector("[data-image-fit-width]").addEventListener(
+    "click",
+    () => {
+      if (!selectedImage) return;
+      setImageWidth(editorImageMaxWidth(editor, selectedImage));
+      commitImageSize();
+    },
+    { signal },
+  );
+
+  resizeObserver.observe(editor);
+  editorImageResizeCleanup = () => {
+    controller.abort();
+    resizeObserver.disconnect();
+    overlay.remove();
+  };
+}
+
 function bindDetailPage(section) {
   const editor = app.querySelector("[data-editor]");
 
@@ -2797,6 +3040,7 @@ function bindDetailPage(section) {
     activeExperiment.content = editor.innerHTML;
     scheduleSave();
   });
+  bindEditorImageResizing(editor);
 
   app.querySelectorAll("[data-command]").forEach((button) => {
     button.addEventListener("click", () => runCommand(button.dataset.command));

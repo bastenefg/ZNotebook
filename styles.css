@@ -1674,6 +1674,7 @@ h1 {
 }
 
 .editor-shell {
+  position: relative;
   overflow: visible;
   background: var(--surface);
 }
@@ -1769,9 +1770,97 @@ h1 {
 .editor video {
   display: block;
   max-width: 100%;
+  height: auto;
   margin: 14px 0;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.editor img {
+  cursor: pointer;
+}
+
+.editor img:hover {
+  outline: 2px solid rgba(15, 118, 110, 0.2);
+  outline-offset: 2px;
+}
+
+.image-resize-overlay {
+  position: absolute;
+  z-index: 9;
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+}
+
+.image-resize-controls {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 2px 3px 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.96);
+  pointer-events: auto;
+  box-shadow: 0 3px 12px rgba(23, 32, 28, 0.14);
+  user-select: none;
+}
+
+.image-resize-size {
+  min-width: 48px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.image-resize-controls .icon-btn {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.image-resize-handle {
+  position: absolute;
+  right: -13px;
+  bottom: -13px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid white;
+  border-radius: 7px;
+  background: var(--accent);
+  color: white;
+  cursor: nwse-resize;
+  pointer-events: auto;
+  touch-action: none;
+  box-shadow: 0 2px 8px rgba(10, 91, 85, 0.28);
+}
+
+.image-resize-handle:hover,
+.image-resize-handle:focus-visible,
+.image-resize-overlay.is-resizing .image-resize-handle {
+  background: var(--accent-strong);
+}
+
+.image-resize-handle svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
 }
 
 .meta-panel {

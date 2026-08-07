@@ -78,6 +78,8 @@ The editor saves automatically. Watch the save indicator near the top of the pag
 
 Use the image or video button in the editor toolbar. Uploaded files are stored in the notebook's Drive storage through the backend.
 
+To resize an image, click it and drag the handle at its bottom-right corner. The floating image controls can restore its original size or fit it to the editor width. Image proportions are preserved, and the selected width is saved with the record and used in PDF exports.
+
 For very large videos, upload may take time. If an upload fails, try a smaller file first. If small uploads also fail, tell the admin.
 
 ## Statuses, Outcomes, and Labels
