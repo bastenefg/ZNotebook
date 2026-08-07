@@ -18,7 +18,7 @@ Open `index.html` in a browser. The app stores records in browser IndexedDB, inc
 - `customFields`: user-defined columns such as owner, project, batch, instrument, strain, or priority
 - `content`: rich HTML note body
 
-Surgery records use `recordType: "surgery"` and store the surgery name, surgery date, surgical notes, card photos, termination date, termination notes, and collection photos. Active procedures and collected samples are separate views of the same recoverable record, with the surgery-to-collection duration calculated from their calendar dates.
+Surgery records use `recordType: "surgery"` and store the surgery name, surgery date, optional desired endpoint in days, surgical notes, card photos, termination date, termination notes, and collection photos. Active procedures show a calculated planned termination date; collected samples show the actual surgery-to-collection duration calculated from their calendar dates.
 
 Built-in field names can be renamed through `Edit labels`. New sections can be created with `Add section`, and each section can choose its starting columns. Section titles can be renamed from their header controls. Columns can be added from the section header and removed from the table header hover control.
 

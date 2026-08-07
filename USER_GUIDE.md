@@ -34,12 +34,12 @@ Use the search box to find records across visible sections. Use `Sync` to pull t
 
 Open `Surgeries` from the top navigation. The page has two views:
 
-- `Active surgeries` contains procedures that have not been terminated.
+- `Active surgeries` contains procedures that have not been terminated. Enter a desired endpoint in calendar days when adding or editing a surgery; the app calculates and displays its planned termination date in the active list.
 - `Collected samples` contains procedures whose termination and tissue collection have been recorded. Each entry clearly shows the number of calendar days from surgery to collection.
 
-For a new procedure, click `Take picture` on a phone. The app requests the rear camera so you can photograph the completed surgery card immediately. Confirm the photo, add a surgery name, review the surgery date (today is selected by default), and add any surgical notes. You can also choose existing photos or use `Add manually` when no card image is available.
+For a new procedure, click `Take picture` on a phone. The app requests the rear camera so you can photograph the completed surgery card immediately. Confirm the photo, add a surgery name, review the surgery date (today is selected by default), enter the desired endpoint in days when known, and add any surgical notes. You can also choose existing photos or use `Add manually` when no card image is available.
 
-Open a surgery to edit its name, date, or notes and to attach more card photos. Click a photo to inspect it at full size.
+Open an active surgery to edit its name, surgery date, desired endpoint, or notes and to attach more card photos. Changing the surgery date or endpoint immediately updates the planned termination preview. Click a photo to inspect it at full size.
 
 When the animal is euthanized and tissue is collected, open the active surgery and click `Terminate & collect`. Confirm the termination date (today is selected by default), add termination or collection notes, and attach any relevant photos. Saving moves the procedure to `Collected samples`. Collection details and additional photos can still be added later.
 

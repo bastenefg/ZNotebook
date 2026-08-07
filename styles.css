@@ -999,9 +999,15 @@ h1 {
 }
 
 .surgery-row-meta .surgery-duration dd,
+.surgery-row-meta .surgery-planned-date dd,
 .collection-duration-block strong {
   color: var(--accent-strong);
   font-weight: 850;
+}
+
+.surgery-row-meta .is-unset dd {
+  color: var(--muted);
+  font-weight: 700;
 }
 
 .surgery-row-arrow {
@@ -1062,6 +1068,26 @@ h1 {
 
 .surgery-notes-input {
   min-height: 118px;
+}
+
+.planned-termination-preview {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.planned-termination-preview strong {
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 850;
 }
 
 .pending-photo-actions,

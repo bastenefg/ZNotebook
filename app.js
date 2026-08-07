@@ -494,6 +494,23 @@ function calendarDayNumber(value) {
   return timestamp / 86400000;
 }
 
+function normalizeEndpointDays(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const days = Number(value);
+  return Number.isInteger(days) && days >= 0 ? days : null;
+}
+
+function calculatePlannedTerminationDate(surgeryDate, endpointDays) {
+  const startDay = calendarDayNumber(surgeryDate);
+  const days = normalizeEndpointDays(endpointDays);
+  if (startDay === null || days === null) return "";
+
+  const date = new Date((startDay + days) * 86400000);
+  const year = date.getUTCFullYear();
+  if (Number.isNaN(date.getTime()) || year < 1 || year > 9999) return "";
+  return date.toISOString().slice(0, 10);
+}
+
 function daysBetweenDates(startValue, endValue) {
   const startDay = calendarDayNumber(startValue);
   const endDay = calendarDayNumber(endValue);
@@ -505,6 +522,27 @@ function formatElapsedDays(days) {
   if (!Number.isInteger(days)) return "Not available";
   if (days < 0) return "Check dates";
   return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
+function formatEndpointDays(value) {
+  const days = normalizeEndpointDays(value);
+  return days === null ? "Not set" : formatElapsedDays(days);
+}
+
+function bindPlannedTerminationPreview(root) {
+  const dateInput = root.querySelector("[data-surgery-date-input]");
+  const endpointInput = root.querySelector("[data-endpoint-days-input]");
+  const output = root.querySelector("[data-planned-termination-value]");
+  if (!dateInput || !endpointInput || !output) return;
+
+  const update = () => {
+    const plannedDate = calculatePlannedTerminationDate(dateInput.value, endpointInput.value);
+    output.textContent = plannedDate ? formatDate(plannedDate) : "Not set";
+  };
+
+  dateInput.addEventListener("input", update);
+  endpointInput.addEventListener("input", update);
+  update();
 }
 
 function formatUpdated(value) {
@@ -664,6 +702,7 @@ function normalizeSurgeryRecord(record) {
     title: String(record.title || record.name || "Untitled surgery"),
     surgeryDate,
     startDate: surgeryDate,
+    plannedEndpointDays: normalizeEndpointDays(record.plannedEndpointDays),
     surgeryNotes: String(record.surgeryNotes || record.notes || ""),
     surgeryPhotos: (Array.isArray(record.surgeryPhotos) ? record.surgeryPhotos : [])
       .map(normalizeSurgeryPhoto)
@@ -689,6 +728,7 @@ function createSurgery(seed = {}) {
     recordType: "surgery",
     title: seed.title || "Untitled surgery",
     surgeryDate: seed.surgeryDate || today(),
+    plannedEndpointDays: seed.plannedEndpointDays,
     surgeryNotes: seed.surgeryNotes || "",
     surgeryPhotos: [],
     terminationDate: "",
@@ -1184,6 +1224,8 @@ function surgeryMatchesSearch(record, query) {
   return [
     record.title,
     record.surgeryDate,
+    record.plannedEndpointDays,
+    calculatePlannedTerminationDate(record.surgeryDate, record.plannedEndpointDays),
     record.surgeryNotes,
     record.terminationDate,
     record.terminationNotes,
@@ -1221,6 +1263,9 @@ function renderSurgeryRow(record, collected) {
   const elapsedDays = collected
     ? daysBetweenDates(record.surgeryDate, record.terminationDate)
     : null;
+  const plannedTerminationDate = collected
+    ? ""
+    : calculatePlannedTerminationDate(record.surgeryDate, record.plannedEndpointDays);
   return `
     <a class="surgery-row" href="#/surgery/${escapeHtml(record.id)}">
       ${renderSurgeryThumbnail(record)}
@@ -1249,6 +1294,26 @@ function renderSurgeryRow(record, collected) {
           collected
             ? `<div class="surgery-duration"><dt>Days from surgery</dt><dd>${escapeHtml(
                 formatElapsedDays(elapsedDays),
+              )}</dd></div>`
+            : ""
+        }
+        ${
+          !collected
+            ? `<div class="surgery-endpoint ${
+                normalizeEndpointDays(record.plannedEndpointDays) === null ? "is-unset" : ""
+              }"><dt>Endpoint</dt><dd>${escapeHtml(
+                formatEndpointDays(record.plannedEndpointDays),
+              )}</dd></div>`
+            : ""
+        }
+        ${
+          !collected
+            ? `<div class="surgery-planned-date ${
+                plannedTerminationDate ? "" : "is-unset"
+              }" data-planned-termination-date="${escapeHtml(
+                plannedTerminationDate,
+              )}"><dt>Termination date</dt><dd>${escapeHtml(
+                plannedTerminationDate ? formatDate(plannedTerminationDate) : "Not set",
               )}</dd></div>`
             : ""
         }
@@ -1453,7 +1518,15 @@ function openNewSurgeryDialog(initialFiles = []) {
       </div>
       <div class="field-group">
         <label class="field-label" for="surgeryDate">Surgery date</label>
-        <input id="surgeryDate" class="field" name="surgeryDate" type="date" required value="${today()}" />
+        <input id="surgeryDate" class="field" name="surgeryDate" type="date" required value="${today()}" data-surgery-date-input />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="surgeryEndpointDays">Desired endpoint (days)</label>
+        <input id="surgeryEndpointDays" class="field" name="plannedEndpointDays" type="number" min="0" step="1" inputmode="numeric" placeholder="14" data-endpoint-days-input />
+        <output class="planned-termination-preview" for="surgeryDate surgeryEndpointDays">
+          <span>Planned termination</span>
+          <strong data-planned-termination-value>Not set</strong>
+        </output>
       </div>
       <div class="field-group">
         <label class="field-label" for="surgeryNotes">Surgical notes</label>
@@ -1477,6 +1550,7 @@ function openNewSurgeryDialog(initialFiles = []) {
   const submit = form.querySelector("[type='submit']");
   const photoManager = createPendingPhotoManager(dialog, initialFiles);
   wireDialogClose(dialog, photoManager.cleanup);
+  bindPlannedTerminationPreview(form);
   dialog.querySelector("#surgeryName").focus();
 
   form.addEventListener("submit", async (event) => {
@@ -1485,6 +1559,7 @@ function openNewSurgeryDialog(initialFiles = []) {
     const surgery = createSurgery({
       title: String(data.get("title") || "").trim(),
       surgeryDate: String(data.get("surgeryDate") || today()),
+      plannedEndpointDays: data.get("plannedEndpointDays"),
       surgeryNotes: String(data.get("surgeryNotes") || "").trim(),
     });
     const files = photoManager.files();
@@ -1596,6 +1671,12 @@ async function renderSurgeryDetailPage(id) {
   const elapsedDays = collected
     ? daysBetweenDates(activeSurgery.surgeryDate, activeSurgery.terminationDate)
     : null;
+  const plannedTerminationDate = collected
+    ? ""
+    : calculatePlannedTerminationDate(
+        activeSurgery.surgeryDate,
+        activeSurgery.plannedEndpointDays,
+      );
   const storageLocked = surgeryStorageLocked();
   renderShell(`
     <main class="page surgery-detail-page">
@@ -1654,8 +1735,24 @@ async function renderSurgeryDetailPage(id) {
               storageLocked ? "disabled" : ""
             } value="${escapeHtml(
               activeSurgery.surgeryDate,
-            )}" />
+            )}" data-surgery-date-input />
           </div>
+          ${
+            !collected
+              ? `<div class="field-group">
+                  <label class="field-label" for="detailEndpointDays">Desired endpoint (days)</label>
+                  <input id="detailEndpointDays" class="field" name="plannedEndpointDays" type="number" min="0" step="1" inputmode="numeric" placeholder="14" ${
+                    storageLocked ? "disabled" : ""
+                  } value="${escapeHtml(activeSurgery.plannedEndpointDays ?? "")}" data-endpoint-days-input />
+                  <output class="planned-termination-preview" for="detailSurgeryDate detailEndpointDays">
+                    <span>Planned termination</span>
+                    <strong data-planned-termination-value>${escapeHtml(
+                      plannedTerminationDate ? formatDate(plannedTerminationDate) : "Not set",
+                    )}</strong>
+                  </output>
+                </div>`
+              : ""
+          }
           <div class="field-group">
             <label class="field-label" for="detailSurgeryNotes">Surgical notes</label>
             <textarea id="detailSurgeryNotes" class="textarea surgery-notes-input" name="surgeryNotes" ${
@@ -1723,6 +1820,7 @@ async function renderSurgeryDetailPage(id) {
   `);
 
   const detailsForm = app.querySelector("[data-surgery-details-form]");
+  bindPlannedTerminationPreview(detailsForm);
   detailsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!requireSurgeryStorage()) return;
@@ -1733,6 +1831,9 @@ async function renderSurgeryDetailPage(id) {
     activeSurgery.title = String(data.get("title") || "").trim();
     activeSurgery.surgeryDate = normalizedRecordDate(data.get("surgeryDate"));
     activeSurgery.startDate = activeSurgery.surgeryDate;
+    if (!collected) {
+      activeSurgery.plannedEndpointDays = normalizeEndpointDays(data.get("plannedEndpointDays"));
+    }
     activeSurgery.surgeryNotes = String(data.get("surgeryNotes") || "").trim();
     activeSurgery.updatedAt = now();
 
