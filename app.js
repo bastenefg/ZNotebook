@@ -474,6 +474,39 @@ function formatDate(value) {
   });
 }
 
+function calendarDayNumber(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return timestamp / 86400000;
+}
+
+function daysBetweenDates(startValue, endValue) {
+  const startDay = calendarDayNumber(startValue);
+  const endDay = calendarDayNumber(endValue);
+  if (startDay === null || endDay === null) return null;
+  return endDay - startDay;
+}
+
+function formatElapsedDays(days) {
+  if (!Number.isInteger(days)) return "Not available";
+  if (days < 0) return "Check dates";
+  return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
 function formatUpdated(value) {
   if (!value) return "";
   return new Intl.DateTimeFormat(undefined, {
@@ -1185,6 +1218,9 @@ function renderSurgeryThumbnail(record) {
 function renderSurgeryRow(record, collected) {
   const surgeryPhotoCount = record.surgeryPhotos.length;
   const collectionPhotoCount = record.terminationPhotos.length;
+  const elapsedDays = collected
+    ? daysBetweenDates(record.surgeryDate, record.terminationDate)
+    : null;
   return `
     <a class="surgery-row" href="#/surgery/${escapeHtml(record.id)}">
       ${renderSurgeryThumbnail(record)}
@@ -1207,6 +1243,13 @@ function renderSurgeryRow(record, collected) {
         ${
           collected
             ? `<div><dt>Collected</dt><dd>${escapeHtml(formatDate(record.terminationDate))}</dd></div>`
+            : ""
+        }
+        ${
+          collected
+            ? `<div class="surgery-duration"><dt>Days from surgery</dt><dd>${escapeHtml(
+                formatElapsedDays(elapsedDays),
+              )}</dd></div>`
             : ""
         }
         <div>
@@ -1550,6 +1593,9 @@ async function renderSurgeryDetailPage(id) {
   activeExperiment = null;
   activeSurgery = normalizeSurgeryRecord(record);
   const collected = Boolean(activeSurgery.terminationDate);
+  const elapsedDays = collected
+    ? daysBetweenDates(activeSurgery.surgeryDate, activeSurgery.terminationDate)
+    : null;
   const storageLocked = surgeryStorageLocked();
   renderShell(`
     <main class="page surgery-detail-page">
@@ -1647,6 +1693,10 @@ async function renderSurgeryDetailPage(id) {
                 <div class="collection-date-block">
                   <span>Termination date</span>
                   <strong>${escapeHtml(formatDate(activeSurgery.terminationDate))}</strong>
+                </div>
+                <div class="collection-duration-block">
+                  <span>Days from surgery</span>
+                  <strong>${escapeHtml(formatElapsedDays(elapsedDays))}</strong>
                 </div>
                 <div class="collection-notes-block">
                   <span>Termination and collection notes</span>

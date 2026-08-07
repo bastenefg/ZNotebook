@@ -35,7 +35,7 @@ Use the search box to find records across visible sections. Use `Sync` to pull t
 Open `Surgeries` from the top navigation. The page has two views:
 
 - `Active surgeries` contains procedures that have not been terminated.
-- `Collected samples` contains procedures whose termination and tissue collection have been recorded.
+- `Collected samples` contains procedures whose termination and tissue collection have been recorded. Each entry clearly shows the number of calendar days from surgery to collection.
 
 For a new procedure, click `Take picture` on a phone. The app requests the rear camera so you can photograph the completed surgery card immediately. Confirm the photo, add a surgery name, review the surgery date (today is selected by default), and add any surgical notes. You can also choose existing photos or use `Add manually` when no card image is available.
 

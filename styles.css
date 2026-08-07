@@ -998,6 +998,12 @@ h1 {
   font-weight: 750;
 }
 
+.surgery-row-meta .surgery-duration dd,
+.collection-duration-block strong {
+  color: var(--accent-strong);
+  font-weight: 850;
+}
+
 .surgery-row-arrow {
   display: grid;
   place-items: center;
@@ -1297,7 +1303,7 @@ h1 {
 
 .collection-summary {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 180px 180px minmax(0, 1fr);
   gap: 18px;
   margin-bottom: 16px;
   padding: 15px 16px;
@@ -1827,7 +1833,7 @@ h1 {
   .surgery-row-meta {
     grid-column: 2 / 4;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     justify-content: stretch;
     gap: 10px;
     padding-top: 8px;
