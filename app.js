@@ -112,6 +112,7 @@ let activeExperiment = null;
 let activeSurgery = null;
 let saveTimer = null;
 let editorImageResizeCleanup = null;
+const recordSaveQueues = new Map();
 let currentFilters = { search: "", showDeleted: false, showDeletedSections: false };
 let surgeryFilters = {
   search: "",
@@ -670,10 +671,23 @@ function replaceAllExperiments(records) {
 }
 
 async function saveExperimentRecord(experiment) {
-  if (driveState.connected) {
-    await driveSaveRecord(experiment);
-  }
-  await putExperiment(experiment);
+  const recordId = String(experiment.id || "");
+  const snapshot = JSON.parse(JSON.stringify(experiment));
+  const previousSave = recordSaveQueues.get(recordId) || Promise.resolve();
+  const operation = previousSave.then(async () => {
+    if (driveState.connected) {
+      await driveSaveRecord(snapshot);
+    }
+    await putExperiment(snapshot);
+  });
+  const trackedOperation = operation.finally(() => {
+    if (recordSaveQueues.get(recordId) === trackedOperation) {
+      recordSaveQueues.delete(recordId);
+    }
+  });
+
+  recordSaveQueues.set(recordId, trackedOperation);
+  await trackedOperation;
 }
 
 async function markExperimentDeleted(experiment) {
