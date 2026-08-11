@@ -58,6 +58,8 @@ In the hosted app, Drive must be connected before surgery records can be added o
 3. Fill in the title and any available fields.
 4. Save the record.
 
+New records default to `In progress` and `Pending`, with a `Details` heading and an empty bullet ready for notes.
+
 Click anywhere on a row to open the full detail page.
 
 ## Edit a Record Page

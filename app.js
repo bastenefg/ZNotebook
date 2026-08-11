@@ -10,6 +10,9 @@ const EDITOR_IMAGE_MIN_WIDTH = 120;
 const EDITOR_IMAGE_MAX_STORED_WIDTH = 4096;
 const DEFAULT_SECTION_ID = "experiments";
 const SURGERY_SECTION_ID = "__surgeries__";
+const DEFAULT_RECORD_STATUS = "in-progress";
+const DEFAULT_RECORD_OUTCOME = "pending";
+const DEFAULT_RECORD_CONTENT = "<h2>Details</h2><ul><li></li></ul>";
 
 const DEFAULT_STATUSES = [
   { value: "planned", label: "Planned" },
@@ -795,14 +798,12 @@ function createExperiment(section, seed = {}) {
     sectionId: section.id,
     title: seed.title || `Untitled ${section.name}`,
     startDate: seed.startDate || today(),
-    status: seed.status || "planned",
-    outcome: seed.outcome || "pending",
+    status: seed.status || DEFAULT_RECORD_STATUS,
+    outcome: seed.outcome || DEFAULT_RECORD_OUTCOME,
     labels: seed.labels || [],
     summary: seed.summary || "",
     customFields: seed.customFields || {},
-    content:
-      seed.content ||
-      `<h2>${escapeHtml(section.name)} notes</h2><p></p><h2>Details</h2><ul><li></li></ul>`,
+    content: seed.content || DEFAULT_RECORD_CONTENT,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -4135,7 +4136,11 @@ async function saveActiveExperiment() {
 
 function openNewRecordDialog(sectionId) {
   const section = sectionById(sectionId);
-  const draft = { customFields: {} };
+  const draft = {
+    status: DEFAULT_RECORD_STATUS,
+    outcome: DEFAULT_RECORD_OUTCOME,
+    customFields: {},
+  };
   const dialog = document.createElement("div");
   dialog.className = "dialog-backdrop";
   dialog.innerHTML = `
@@ -4167,8 +4172,8 @@ function openNewRecordDialog(sectionId) {
     const experiment = createExperiment(section, {
       title: data.get("title").trim(),
       startDate: data.get("startDate") || today(),
-      status: data.get("status") || "planned",
-      outcome: data.get("outcome") || "pending",
+      status: data.get("status") || DEFAULT_RECORD_STATUS,
+      outcome: data.get("outcome") || DEFAULT_RECORD_OUTCOME,
       labels: collectLabelString(dialog),
       customFields: collectCustomFields(dialog, "data-new-column"),
     });
