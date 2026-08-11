@@ -2417,7 +2417,7 @@ function renderColumnInput(column, experiment, attributeName) {
       return `
         <div class="field-group">
           <label class="field-label" for="startDate">${escapeHtml(column.label)}</label>
-          <input id="startDate" class="field" type="date" value="${escapeHtml(
+          <input id="startDate" class="field" name="startDate" type="date" value="${escapeHtml(
             experiment.startDate || "",
           )}" data-field="startDate" />
         </div>
@@ -2428,7 +2428,7 @@ function renderColumnInput(column, experiment, attributeName) {
         <div class="field-group">
           <label class="field-label" for="status">${escapeHtml(column.label)}</label>
           <div class="choice-row">
-            <select id="status" class="select" data-field="status">
+            <select id="status" class="select" name="status" data-field="status">
               ${optionList(taxonomyOptions("statuses"), experiment.status)}
             </select>
             <button class="icon-btn" type="button" title="Add ${escapeHtml(
@@ -2445,7 +2445,7 @@ function renderColumnInput(column, experiment, attributeName) {
         <div class="field-group">
           <label class="field-label" for="outcome">${escapeHtml(column.label)}</label>
           <div class="choice-row">
-            <select id="outcome" class="select" data-field="outcome">
+            <select id="outcome" class="select" name="outcome" data-field="outcome">
               ${optionList(taxonomyOptions("outcomes"), experiment.outcome)}
             </select>
             <button class="icon-btn" type="button" title="Add ${escapeHtml(
