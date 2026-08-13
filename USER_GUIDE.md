@@ -146,6 +146,8 @@ If you cannot sign in, make sure you are using the exact Google account the admi
 
 If the app asks you to reconnect, click `Connect Drive` again.
 
+If connecting shows a message that the notebook storage service cannot be reached, reload the notebook and retry once. If it continues, open `https://znotebook-api-417347365496.us-central1.run.app/health` in the same browser. A healthy service displays a short JSON response containing `"ok":true`. If that page does not open, temporarily disable a VPN or content blocker, or try another browser or network, then tell the notebook admin.
+
 If a record or image seems missing, click `Sync` and refresh the page.
 
 If an upload fails, try a smaller file. If that also fails, send the admin the error message.

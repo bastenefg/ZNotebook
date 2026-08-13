@@ -6,6 +6,7 @@ const DRIVE_SETTINGS_KEY = "definitely-not-notion-drive-v1";
 const BACKEND_CREDENTIAL_KEY = "definitely-not-notion-backend-credential-v1";
 const TERMINATION_REMINDER_KEY = "infus-termination-reminders-dismissed-v1";
 const TERMINATION_REMINDER_WINDOW_DAYS = 2;
+const BACKEND_CONNECT_RETRY_DELAY_MS = 900;
 const EDITOR_IMAGE_MIN_WIDTH = 120;
 const EDITOR_IMAGE_MAX_STORED_WIDTH = 4096;
 const DEFAULT_SECTION_ID = "experiments";
@@ -3749,7 +3750,7 @@ async function connectDrive(credential) {
   driveState.status = "Connecting...";
   await route();
 
-  const workspace = await backendRequest("/workspace/init", {
+  const workspace = await backendConnectionRequest("/workspace/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ taxonomy, records: experiments }),
@@ -3968,6 +3969,41 @@ async function backendRequest(path, options = {}) {
   if (!response.ok) throw await backendError(response);
   if (response.status === 204) return null;
   return response.json();
+}
+
+function isBackendNetworkError(error) {
+  return (
+    error instanceof TypeError ||
+    /failed to fetch|networkerror|load failed|network request failed/i.test(
+      String(error?.message || ""),
+    )
+  );
+}
+
+function backendConnectionError(error) {
+  const healthUrl = `${driveSettings.backendUrl}/health`;
+  const connectionError = new Error(
+    `Could not reach the notebook storage service after two attempts. Check your internet connection, VPN, firewall, or browser privacy settings, then try again. Service test: ${healthUrl}`,
+  );
+  connectionError.cause = error;
+  return connectionError;
+}
+
+async function backendConnectionRequest(path, options = {}) {
+  try {
+    return await backendRequest(path, options);
+  } catch (error) {
+    if (!isBackendNetworkError(error)) throw error;
+  }
+
+  await new Promise((resolve) => window.setTimeout(resolve, BACKEND_CONNECT_RETRY_DELAY_MS));
+
+  try {
+    return await backendRequest(path, options);
+  } catch (error) {
+    if (isBackendNetworkError(error)) throw backendConnectionError(error);
+    throw error;
+  }
 }
 
 async function backendFetch(path, options = {}) {

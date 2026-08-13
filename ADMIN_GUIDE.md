@@ -217,6 +217,10 @@ Add the exact email address to `ALLOWED_EMAILS`, redeploy, then ask the user to 
 
 Ask the user to click `Connect Drive` and sign in again.
 
+`Failed to fetch` or `Could not reach the notebook storage service.`
+
+Open `YOUR_CLOUD_RUN_BACKEND_URL/health`. A healthy service returns JSON containing `"ok":true`. If it works for the admin but not the affected user, have that user test the same health URL, reload the notebook, and retry without a VPN, content blocker, or restrictive browser profile. A missing allowlist entry is not a network failure; it produces the separate `This Google account is not allowed` message.
+
 `Drive owner authorization expired or was revoked.`
 
 Regenerate `DRIVE_OWNER_REFRESH_TOKEN`, update Cloud Run, and confirm the OAuth app is `In production`.
