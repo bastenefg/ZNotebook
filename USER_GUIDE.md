@@ -12,7 +12,11 @@ https://bastenefg.github.io/ZNotebook/
 
 Click `Connect Drive`, then sign in with the Google account your admin authorized for the notebook. If you see a message saying your account is not allowed, ask the notebook admin to add that exact email address.
 
-The app may ask you to connect again after a while. This is normal Google sign-in behavior. Click `Connect Drive` and sign in again.
+While connecting, a progress message appears below the navigation on phones and computers. You can close the sign-in panel while the notebook loads. Wait for `Drive connected` before editing shared records.
+
+The app reuses a saved Google sign-in while it is valid. If the connection is interrupted, click `Retry connection`; you do not need to choose your account again while that sign-in is valid. If you see `Sign-in expired`, sign in again. A slow or unavailable service shows an error instead of waiting indefinitely.
+
+Connecting opens the existing Drive notebook. It does not upload local-only records or demo data. Export a local JSON backup before switching to Drive if you need to retain a separate local notebook.
 
 ## Main Notebook View
 

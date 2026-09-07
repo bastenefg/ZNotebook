@@ -22,6 +22,9 @@ const DRIVE_RECORDS_FOLDER_NAME = "records";
 const DRIVE_ASSETS_FOLDER_NAME = "assets";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
+const DRIVE_READ_CONCURRENCY = 6;
+const RECORD_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const RECORD_CACHE_MAX_ENTRIES = 1000;
 
 const driveAuthMode = driveOwnerOAuthConfigured() ? "storage-owner-oauth" : "service-account";
 const googleAuth = driveAuthMode === "service-account" ? new GoogleAuth({ scopes: [DRIVE_SCOPE] }) : null;
@@ -32,6 +35,12 @@ const driveOwnerClient =
 const tokenVerifier = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 let workspaceCache = null;
+let workspacePromise = null;
+let workspaceInitQueue = Promise.resolve();
+let driveAccessTokenPromise = null;
+const recordCache = new Map();
+const recordReads = new Map();
+let recordCacheBytes = 0;
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "25mb" }));
@@ -60,17 +69,7 @@ app.get("/workspace", async (req, res, next) => {
 
 app.post("/workspace/init", async (req, res, next) => {
   try {
-    const workspace = await ensureWorkspace(req.body?.taxonomy);
-    const snapshot = await readWorkspace(workspace);
-
-    if (!snapshot.records.length && Array.isArray(req.body?.records)) {
-      const records = req.body.records.filter((record) => record && record.id);
-      await Promise.all(records.map((record) => upsertRecord(workspace.recordsFolderId, record)));
-      res.json(await readWorkspace(workspace));
-      return;
-    }
-
-    res.json(snapshot);
+    res.json(await initializeWorkspace(req.body?.taxonomy, req.body?.records));
   } catch (error) {
     next(error);
   }
@@ -247,36 +246,69 @@ function isAllowedEmail(email) {
 
 async function ensureWorkspace(seedTaxonomy = null) {
   if (workspaceCache) return workspaceCache;
+  if (workspacePromise) return workspacePromise;
 
-  const recordsFolderId = await driveEnsureFolder(DRIVE_FOLDER_ID, DRIVE_RECORDS_FOLDER_NAME);
-  const assetsFolderId = await driveEnsureFolder(DRIVE_FOLDER_ID, DRIVE_ASSETS_FOLDER_NAME);
-  let configFile = await driveFindChild(DRIVE_FOLDER_ID, DRIVE_CONFIG_NAME);
-
-  if (!configFile) {
-    configFile = await driveCreateJson(DRIVE_FOLDER_ID, DRIVE_CONFIG_NAME, {
+  // Concurrent connections must share discovery, especially on a new workspace
+  // where otherwise each request could create its own folders or config file.
+  workspacePromise = (async () => {
+    const discovery = await Promise.allSettled([
+      driveEnsureFolder(DRIVE_FOLDER_ID, DRIVE_RECORDS_FOLDER_NAME),
+      driveEnsureFolder(DRIVE_FOLDER_ID, DRIVE_ASSETS_FOLDER_NAME),
+      driveFindChild(DRIVE_FOLDER_ID, DRIVE_CONFIG_NAME),
+    ]);
+    const failure = discovery.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
+    const [recordsFolderId, assetsFolderId, existingConfig] = discovery.map((result) => result.value);
+    const configFile = existingConfig || await driveCreateJson(DRIVE_FOLDER_ID, DRIVE_CONFIG_NAME, {
       app: "INFUS Notebook",
       version: 1,
       updatedAt: new Date().toISOString(),
       taxonomy: seedTaxonomy || {},
     });
-  }
 
-  workspaceCache = {
-    recordsFolderId,
-    assetsFolderId,
-    configFileId: configFile.id,
-  };
-  return workspaceCache;
+    workspaceCache = { recordsFolderId, assetsFolderId, configFileId: configFile.id };
+    return workspaceCache;
+  })();
+  try {
+    return await workspacePromise;
+  } finally {
+    // A transient discovery error must not poison every subsequent connection.
+    workspacePromise = null;
+  }
+}
+
+function initializeWorkspace(taxonomy, seedRecords) {
+  // Serialize the empty-workspace check and seeding within this server instance.
+  const initialization = workspaceInitQueue.then(async () => {
+    const workspace = await ensureWorkspace(taxonomy);
+    const snapshot = await readWorkspace(workspace);
+    if (!snapshot.records.length && Array.isArray(seedRecords)) {
+      const records = seedRecords.filter((record) => record && record.id);
+      if (records.length) {
+        await mapWithConcurrency(records, DRIVE_READ_CONCURRENCY,
+          (record) => upsertRecord(workspace.recordsFolderId, record));
+        return readWorkspace(workspace);
+      }
+    }
+    return snapshot;
+  });
+  workspaceInitQueue = initialization.catch(() => {});
+  return initialization;
 }
 
 async function readWorkspace(workspace) {
-  const config = await driveReadJson(workspace.configFileId);
-  const files = await driveListChildren(workspace.recordsFolderId);
+  const [config, files] = await Promise.all([
+    driveReadJson(workspace.configFileId),
+    driveListChildren(workspace.recordsFolderId),
+  ]);
+  const recordFiles = files.filter((item) => item.name.endsWith(".json"));
+  const contents = await mapWithConcurrency(recordFiles, DRIVE_READ_CONCURRENCY, readRecordFile);
   const records = [];
   const recordMeta = {};
 
-  for (const file of files.filter((item) => item.name.endsWith(".json"))) {
-    const record = await driveReadJson(file.id);
+  for (let index = 0; index < recordFiles.length; index += 1) {
+    const file = recordFiles[index];
+    const record = contents[index];
     if (!record || !record.id) continue;
     records.push(record);
     recordMeta[record.id] = {
@@ -290,6 +322,67 @@ async function readWorkspace(workspace) {
     records,
     recordMeta,
   };
+}
+
+async function mapWithConcurrency(items, concurrency, map) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  let failed = false;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (!failed && nextIndex < items.length) {
+      const index = nextIndex++;
+      try {
+        results[index] = await map(items[index], index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+async function readRecordFile(file) {
+  // The folder is always listed first, so external edits are revalidated on
+  // every sync. Version also detects edits that preserve modifiedTime.
+  const version = file.version ? `v:${file.version}` : file.modifiedTime;
+  if (!version) return driveReadJson(file.id);
+  const cached = recordCache.get(file.id);
+  if (cached?.version === version) {
+    recordCache.delete(file.id);
+    recordCache.set(file.id, cached);
+    return cached.data;
+  }
+
+  const readKey = JSON.stringify([file.id, version]);
+  if (recordReads.has(readKey)) return recordReads.get(readKey);
+  const pending = (async () => {
+    const data = await driveReadJson(file.id);
+    const bytes = Buffer.byteLength(JSON.stringify(data) || "");
+    invalidateRecordCache(file.id);
+    if (bytes <= RECORD_CACHE_MAX_BYTES) {
+      while (recordCache.size &&
+        (recordCacheBytes + bytes > RECORD_CACHE_MAX_BYTES || recordCache.size >= RECORD_CACHE_MAX_ENTRIES)) {
+        invalidateRecordCache(recordCache.keys().next().value);
+      }
+      recordCache.set(file.id, { version, data, bytes });
+      recordCacheBytes += bytes;
+    }
+    return data;
+  })();
+  recordReads.set(readKey, pending);
+  try {
+    return await pending;
+  } finally {
+    recordReads.delete(readKey);
+  }
+}
+
+function invalidateRecordCache(fileId) {
+  const entry = recordCache.get(fileId);
+  if (entry) recordCacheBytes -= entry.bytes;
+  recordCache.delete(fileId);
 }
 
 async function upsertRecord(recordsFolderId, record, lastKnownModifiedTime = "", force = false) {
@@ -348,13 +441,20 @@ async function driveFindChild(parentId, name, mimeType = "") {
 async function driveListChildren(parentId) {
   const params = new URLSearchParams({
     q: `'${parentId}' in parents and trashed = false`,
-    fields: "files(id,name,mimeType,modifiedTime)",
+    fields: "nextPageToken,files(id,name,mimeType,modifiedTime,version)",
     supportsAllDrives: "true",
     includeItemsFromAllDrives: "true",
     pageSize: "1000",
   });
-  const result = await driveRequest(`https://www.googleapis.com/drive/v3/files?${params}`);
-  return result.files || [];
+  const files = [];
+  let nextPageToken;
+  do {
+    if (nextPageToken) params.set("pageToken", nextPageToken);
+    const result = await driveRequest(`https://www.googleapis.com/drive/v3/files?${params}`);
+    files.push(...(result.files || []));
+    nextPageToken = result.nextPageToken;
+  } while (nextPageToken);
+  return files;
 }
 
 async function driveReadJson(fileId) {
@@ -428,14 +528,19 @@ async function driveUpdateJson(fileId, data) {
     supportsAllDrives: "true",
     fields: "id,name,mimeType,modifiedTime",
   });
-  return driveRequest(
-    `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?${params}`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data, null, 2),
-    },
-  );
+  invalidateRecordCache(fileId);
+  try {
+    return await driveRequest(
+      `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?${params}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data, null, 2),
+      },
+    );
+  } finally {
+    invalidateRecordCache(fileId);
+  }
 }
 
 async function driveRequest(url, options = {}) {
@@ -460,6 +565,16 @@ async function driveFetch(url, options = {}) {
 }
 
 async function getDriveAccessToken() {
+  if (driveAccessTokenPromise) return driveAccessTokenPromise;
+  driveAccessTokenPromise = acquireDriveAccessToken();
+  try {
+    return await driveAccessTokenPromise;
+  } finally {
+    driveAccessTokenPromise = null;
+  }
+}
+
+async function acquireDriveAccessToken() {
   try {
     const client =
       driveAuthMode === "storage-owner-oauth"

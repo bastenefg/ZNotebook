@@ -7,6 +7,7 @@ const BACKEND_CREDENTIAL_KEY = "definitely-not-notion-backend-credential-v1";
 const TERMINATION_REMINDER_KEY = "infus-termination-reminders-dismissed-v1";
 const TERMINATION_REMINDER_WINDOW_DAYS = 2;
 const BACKEND_CONNECT_RETRY_DELAY_MS = 900;
+const BACKEND_CONNECT_TIMEOUT_MS = 45000;
 const EDITOR_IMAGE_MIN_WIDTH = 120;
 const EDITOR_IMAGE_MAX_STORED_WIDTH = 4096;
 const DEFAULT_SECTION_ID = "experiments";
@@ -126,8 +127,14 @@ let surgeryFilters = {
 };
 let taxonomy = loadTaxonomy();
 let driveSettings = loadDriveSettings();
+let connectionAttempt = null;
+let googleIdentityPromise = null;
+let backendWarmup = null;
 let driveState = {
   connected: false,
+  connecting: false,
+  syncing: false,
+  error: "",
   accessToken: "",
   assetObjectUrls: [],
   recordModifiedTimes: {},
@@ -1074,6 +1081,7 @@ function renderShell(content) {
         }</span></button>
       </div>
     </header>
+    <section class="connection-feedback" data-connection-feedback role="status" aria-live="polite" aria-atomic="true"></section>
     ${
       terminationReminders.length
         ? `<div class="global-alerts">${terminationReminderMarkup(terminationReminders)}</div>`
@@ -1084,6 +1092,7 @@ function renderShell(content) {
   app.querySelector("[data-action='drive-settings']").addEventListener("click", openDriveDialog);
   app.querySelector("[data-action='drive-sync']")?.addEventListener("click", syncDriveNow);
   app.querySelector("[data-action='backup']").addEventListener("click", openBackupDialog);
+  updateConnectionUi();
   app
     .querySelector("[data-action='dismiss-termination-reminders']")
     ?.addEventListener("click", () => {
@@ -1098,13 +1107,69 @@ function revokeDriveObjectUrls() {
 }
 
 function resetDriveState(status = "Local only") {
+  connectionAttempt?.controller.abort();
+  connectionAttempt = null;
+  revokeDriveObjectUrls();
   driveState = {
     connected: false,
+    connecting: false,
+    syncing: false,
+    error: "",
     accessToken: "",
     assetObjectUrls: [],
     recordModifiedTimes: {},
     status,
   };
+}
+
+function savedBackendCredential() {
+  try {
+    return localStorage.getItem(BACKEND_CREDENTIAL_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberBackendCredential(credential) {
+  try {
+    if (credential) localStorage.setItem(BACKEND_CREDENTIAL_KEY, credential);
+    else localStorage.removeItem(BACKEND_CREDENTIAL_KEY);
+  } catch {
+    // Sign-in still works when the browser cannot persist a session.
+  }
+}
+
+function updateConnectionUi() {
+  const busy = driveState.connecting || driveState.syncing;
+  const canRetry = Boolean(driveState.error && isJwtLikelyValid(savedBackendCredential()));
+  const detail = driveState.error || (busy
+    ? "Please wait. Your shared notebook is loading."
+    : driveState.connected ? "Changes save to your shared Drive." : "Connect Drive to open the shared notebook.");
+  const markup = `<span class="connection-indicator ${busy ? "is-spinning" : ""}" aria-hidden="true"></span>
+    <div class="connection-copy"><strong>${escapeHtml(driveState.status)}</strong><span>${escapeHtml(detail)}</span></div>
+    ${driveState.error && !busy ? `<button class="btn ghost" type="button" data-connection-retry>${canRetry ? "Retry connection" : "Sign in"}</button>` : ""}`;
+  document.querySelectorAll("[data-connection-feedback]").forEach((element) => {
+    element.classList.toggle("is-active", Boolean(busy || driveState.error));
+    element.classList.toggle("has-error", Boolean(driveState.error));
+    element.innerHTML = markup;
+    element.querySelector("[data-connection-retry]")?.addEventListener("click", () => {
+      if (canRetry) connectDrive(savedBackendCredential()).catch(() => {});
+      else openDriveDialog();
+    });
+  });
+  document.querySelectorAll(".storage-state").forEach((element) => {
+    element.classList.toggle("is-connected", driveState.connected);
+    element.innerHTML = `<span class="storage-dot" aria-hidden="true"></span>${escapeHtml(driveState.status)}`;
+  });
+  document.querySelectorAll("[data-action='drive-sync'], [data-action='backup']").forEach((button) => { button.disabled = busy; });
+  document.querySelectorAll("[data-google-signin]").forEach((element) => { element.hidden = busy; });
+  document.querySelectorAll("[data-action='save-drive-setup'], [data-action='drive-disconnect']").forEach((button) => { button.disabled = busy; });
+  // Do not allow edits to race with replacement of the local Drive snapshot.
+  const page = app.querySelector("main");
+  if (page) {
+    page.inert = busy;
+    page.setAttribute("aria-busy", String(busy));
+  }
 }
 
 function renderListPage() {
@@ -3464,6 +3529,8 @@ function wireDialogClose(dialog, onClose = () => {}) {
 }
 
 function openDriveDialog() {
+  if (document.querySelector("[data-drive-dialog]")) return;
+  warmBackend();
   const hasHostedConfig = Boolean(driveSettings.configuredByHost);
   const dialog = document.createElement("div");
   dialog.className = "dialog-backdrop";
@@ -3500,6 +3567,7 @@ function openDriveDialog() {
         <label class="field-label">Google sign-in</label>
         <div data-google-signin></div>
       </div>
+      <section class="connection-feedback dialog-connection" data-connection-feedback role="status" aria-live="polite" aria-atomic="true"></section>
       <div class="dialog-actions">
         <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
         <button class="btn ghost" type="button" data-action="save-drive-setup">Save setup</button>
@@ -3528,18 +3596,23 @@ function openDriveDialog() {
       window.alert("Add both the Google Client ID and Cloud Run backend URL.");
       return;
     }
+    if (clientId !== driveSettings.clientId || backendUrl !== driveSettings.backendUrl) {
+      rememberBackendCredential("");
+      resetDriveState();
+    }
     saveDriveSettings({ clientId, backendUrl });
     dialog.remove();
     openDriveDialog();
   });
   dialog.querySelector("[data-action='drive-disconnect']")?.addEventListener("click", async () => {
-    localStorage.removeItem(BACKEND_CREDENTIAL_KEY);
+    rememberBackendCredential("");
     resetDriveState();
     dialog.remove();
     await route();
   });
 
   renderBackendSignIn(dialog.querySelector("[data-google-signin]"), dialog);
+  updateConnectionUi();
 }
 
 function openBackupDialog() {
@@ -3626,7 +3699,7 @@ async function importNotebookBackup(file) {
     );
     if (!confirmed) return;
 
-    if (driveState.connected) resetDriveState();
+    if (driveState.connected || driveState.connecting || driveState.syncing) resetDriveState();
     localStorage.setItem(TAXONOMY_KEY, JSON.stringify(normalizeBackupTaxonomy(parsed.taxonomy)));
     taxonomy = loadTaxonomy();
     await replaceAllExperiments(normalizeBackupRecords(records));
@@ -3680,28 +3753,45 @@ function normalizeBackupRecords(records) {
 }
 
 function loadGoogleIdentityScript() {
-  return new Promise((resolve, reject) => {
-    if (window.google?.accounts?.id) {
-      resolve();
-      return;
-    }
-
-    const existing = document.querySelector("script[data-google-identity]");
-    if (existing) {
-      existing.addEventListener("load", resolve, { once: true });
-      existing.addEventListener("error", reject, { once: true });
-      return;
-    }
-
+  if (window.google?.accounts?.id) return Promise.resolve();
+  if (googleIdentityPromise) return googleIdentityPromise;
+  googleIdentityPromise = new Promise((resolve, reject) => {
+    document.querySelector("script[data-google-identity]")?.remove();
     const script = document.createElement("script");
+    const timer = window.setTimeout(() => fail(), 15000);
+    const fail = () => {
+      window.clearTimeout(timer);
+      script.remove();
+      reject(new Error("Google sign-in could not load. Check your connection and retry."));
+    };
     script.src = "https://accounts.google.com/gsi/client";
     script.async = true;
     script.defer = true;
     script.dataset.googleIdentity = "true";
-    script.onload = resolve;
-    script.onerror = reject;
+    script.onload = () => {
+      if (!window.google?.accounts?.id) { fail(); return; }
+      window.clearTimeout(timer);
+      resolve();
+    };
+    script.onerror = fail;
     document.head.appendChild(script);
+  }).catch((error) => {
+    googleIdentityPromise = null;
+    throw error;
   });
+  return googleIdentityPromise;
+}
+
+function warmBackend() {
+  if (!driveSettings.backendUrl) return;
+  if (backendWarmup?.url === driveSettings.backendUrl && Date.now() - backendWarmup.startedAt < 60000) return;
+  backendWarmup = { url: driveSettings.backendUrl, startedAt: Date.now() };
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 30000);
+  // Overlap a possible service cold start with the Google account chooser.
+  fetch(`${driveSettings.backendUrl}/health`, { signal: controller.signal, cache: "no-store" })
+    .catch(() => {})
+    .finally(() => window.clearTimeout(timer));
 }
 
 async function renderBackendSignIn(container, dialog) {
@@ -3712,18 +3802,19 @@ async function renderBackendSignIn(container, dialog) {
   }
 
   try {
+    container.textContent = "Loading Google sign-in…";
     await loadGoogleIdentityScript();
+    if (!container.isConnected) return;
+    container.textContent = "";
     google.accounts.id.initialize({
       client_id: driveSettings.clientId,
       callback: async (response) => {
         if (!response.credential) return;
         try {
-          localStorage.setItem(BACKEND_CREDENTIAL_KEY, response.credential);
-          dialog.remove();
           await connectDrive(response.credential);
+          if (driveState.connected) dialog.remove();
         } catch (error) {
-          handleDriveError(error);
-          await route();
+          console.warn("Could not connect to backend", error);
         }
       },
     });
@@ -3736,42 +3827,73 @@ async function renderBackendSignIn(container, dialog) {
       width: 260,
     });
   } catch (error) {
-    container.innerHTML = `<p class="dialog-copy">Google sign-in could not load.</p>`;
+    container.innerHTML = `<p class="dialog-copy">Google sign-in could not load. Check your connection.</p><button class="btn" type="button">Retry sign-in</button>`;
+    container.querySelector("button").addEventListener("click", () => renderBackendSignIn(container, dialog));
     console.error(error);
   }
 }
 
-async function connectDrive(credential) {
+function connectDrive(credential) {
   if (!driveSettings.clientId || !driveSettings.backendUrl) {
-    throw new Error("Backend storage is not configured yet.");
+    return Promise.reject(new Error("Backend storage is not configured yet."));
   }
-
+  if (connectionAttempt?.credential === credential) return connectionAttempt.promise;
+  connectionAttempt?.controller.abort();
+  const attempt = { credential, controller: new AbortController(), promise: null };
+  connectionAttempt = attempt;
+  rememberBackendCredential(credential);
   driveState.accessToken = credential;
-  driveState.status = "Connecting...";
-  await route();
-
-  const workspace = await backendConnectionRequest("/workspace/init", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ taxonomy, records: experiments }),
-  });
-  await applyWorkspaceSnapshot(workspace);
-  driveState.connected = true;
-  driveState.status = "Backend connected";
-  await route();
+  driveState.connecting = true;
+  driveState.error = "";
+  driveState.status = "Connecting to Drive…";
+  updateConnectionUi();
+  const slowTimer = window.setTimeout(() => {
+    if (connectionAttempt !== attempt) return;
+    driveState.status = "Still loading your notebook…";
+    updateConnectionUi();
+  }, 8000);
+  attempt.promise = (async () => {
+    try {
+      const workspace = await backendConnectionRequest("/workspace", {
+        signal: attempt.controller.signal,
+        headers: { Authorization: `Bearer ${credential}` },
+      });
+      if (connectionAttempt !== attempt) return;
+      driveState.status = "Opening your notebook…";
+      updateConnectionUi();
+      await applyWorkspaceSnapshot(workspace);
+      if (connectionAttempt !== attempt) return;
+      driveState.connected = true;
+      driveState.status = "Drive connected";
+      driveState.connecting = false;
+      await route();
+      document.querySelector("[data-drive-dialog]")?.closest(".dialog-backdrop")?.remove();
+    } catch (error) {
+      if (connectionAttempt !== attempt) return;
+      handleDriveError(error, { notify: false });
+      throw error;
+    } finally {
+      window.clearTimeout(slowTimer);
+      if (connectionAttempt === attempt) {
+        connectionAttempt = null;
+        driveState.connecting = false;
+        updateConnectionUi();
+      }
+    }
+  })();
+  return attempt.promise;
 }
 
 async function tryAutoConnectBackend() {
   if (!driveSettings.backendUrl || !driveSettings.clientId) return;
-  const credential = localStorage.getItem(BACKEND_CREDENTIAL_KEY);
+  const credential = savedBackendCredential();
   if (!isJwtLikelyValid(credential)) return;
 
   try {
     await connectDrive(credential);
   } catch (error) {
     console.warn("Could not reconnect to backend", error);
-    localStorage.removeItem(BACKEND_CREDENTIAL_KEY);
-    resetDriveState();
+    // connectDrive keeps valid credentials available for a one-click retry.
   }
 }
 
@@ -3792,8 +3914,14 @@ async function initializeDriveWorkspace() {
 }
 
 async function loadDriveWorkspace() {
-  const workspace = await backendRequest("/workspace");
+  const session = driveState;
+  const credential = session.accessToken;
+  const workspace = await backendConnectionRequest("/workspace", {
+    headers: { Authorization: `Bearer ${credential}` },
+  });
+  if (driveState !== session || !session.connected || session.accessToken !== credential) return false;
   await applyWorkspaceSnapshot(workspace);
+  return driveState === session && session.connected && session.accessToken === credential;
 }
 
 async function applyWorkspaceSnapshot(workspace) {
@@ -3823,19 +3951,39 @@ async function applyWorkspaceSnapshot(workspace) {
 }
 
 async function syncDriveNow() {
-  if (!driveState.connected) return;
+  if (!driveState.connected || driveState.connecting || driveState.syncing) return;
+  const session = driveState;
+  const credential = session.accessToken;
+  driveState.syncing = true;
+  driveState.error = "";
+  driveState.status = "Syncing Drive…";
+  updateConnectionUi();
   try {
-    driveState.status = "Syncing...";
-    await route();
-    await loadDriveWorkspace();
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      const saved = await saveActiveExperiment();
+      if (driveState !== session || session.accessToken !== credential) return;
+      if (!saved || !driveState.connected) {
+        driveState.status = "Sync paused — save your changes first";
+        return;
+      }
+    }
+    await Promise.all([...recordSaveQueues.values()]);
+    if (driveState !== session || session.accessToken !== credential) return;
+    if (!await loadDriveWorkspace()) return;
     driveState.status = `Synced ${new Date().toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
     })}`;
     await route();
   } catch (error) {
-    handleDriveError(error);
-    await route();
+    if (driveState === session && session.accessToken === credential) handleDriveError(error);
+  } finally {
+    if (driveState === session) {
+      driveState.syncing = false;
+      updateConnectionUi();
+    }
   }
 }
 
@@ -3981,28 +4129,48 @@ function isBackendNetworkError(error) {
 }
 
 function backendConnectionError(error) {
-  const healthUrl = `${driveSettings.backendUrl}/health`;
   const connectionError = new Error(
-    `Could not reach the notebook storage service after two attempts. Check your internet connection, VPN, firewall, or browser privacy settings, then try again. Service test: ${healthUrl}`,
+    "Could not reach the notebook service. Check your internet connection, then retry.",
   );
   connectionError.cause = error;
   return connectionError;
 }
 
 async function backendConnectionRequest(path, options = {}) {
-  try {
-    return await backendRequest(path, options);
-  } catch (error) {
-    if (!isBackendNetworkError(error)) throw error;
-  }
-
-  await new Promise((resolve) => window.setTimeout(resolve, BACKEND_CONNECT_RETRY_DELAY_MS));
-
-  try {
-    return await backendRequest(path, options);
-  } catch (error) {
-    if (isBackendNetworkError(error)) throw backendConnectionError(error);
-    throw error;
+  const session = driveState;
+  const authorization = options.headers?.Authorization || `Bearer ${session.accessToken}`;
+  // Retry only reads: a failed upload/save can already have reached Drive.
+  const maxAttempts = !options.method || options.method === "GET" ? 2 : 1;
+  for (let index = 0; index < maxAttempts; index += 1) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    let timedOut = false;
+    if (options.signal?.aborted) throw new DOMException("Connection cancelled", "AbortError");
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const timer = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, BACKEND_CONNECT_TIMEOUT_MS);
+    try {
+      return await backendRequest(path, { ...options, signal: controller.signal });
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      if (driveState !== session || `Bearer ${session.accessToken}` !== authorization) throw error;
+      const transient = timedOut || isBackendNetworkError(error) || [429, 502, 503, 504].includes(error.status);
+      if (!transient || index === maxAttempts - 1) {
+        if (timedOut) throw new Error("The notebook service took too long to respond. Retry connection; you do not need to sign in again.");
+        if (isBackendNetworkError(error)) throw backendConnectionError(error);
+        throw error;
+      }
+    } finally {
+      window.clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+    }
+    if (driveState === session && `Bearer ${session.accessToken}` === authorization) {
+      driveState.status = "Retrying connection…";
+      updateConnectionUi();
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, BACKEND_CONNECT_RETRY_DELAY_MS));
   }
 }
 
@@ -4011,8 +4179,8 @@ async function backendFetch(path, options = {}) {
   return fetch(`${driveSettings.backendUrl}${path}`, {
     ...options,
     headers: {
-      ...(options.headers || {}),
       Authorization: `Bearer ${driveState.accessToken}`,
+      ...(options.headers || {}),
     },
   });
 }
@@ -4032,15 +4200,18 @@ async function backendError(response) {
   return error;
 }
 
-function handleDriveError(error) {
+function handleDriveError(error, { notify = true } = {}) {
   console.error(error);
-  if (error.status === 401) {
-    localStorage.removeItem(BACKEND_CREDENTIAL_KEY);
+  if (error.status === 401 || error.status === 403) {
+    rememberBackendCredential("");
   }
   driveState.connected = false;
+  driveState.connecting = false;
   driveState.accessToken = "";
-  driveState.status = "Backend error";
-  window.alert(error.message || String(error));
+  driveState.status = error.status === 401 ? "Sign-in expired" : error.status === 403 ? "Account not allowed" : "Connection interrupted";
+  driveState.error = error.message || String(error);
+  updateConnectionUi();
+  if (notify) window.alert(driveState.error);
 }
 
 function createDriveConflictError(message) {
@@ -4147,6 +4318,7 @@ function scheduleSave() {
 }
 
 async function saveActiveExperiment() {
+  saveTimer = null;
   if (!activeExperiment) return;
   try {
     activeExperiment.updatedAt = now();
@@ -4154,11 +4326,12 @@ async function saveActiveExperiment() {
     await saveExperimentRecord(activeExperiment);
     await loadExperiments();
     setSaveState("Saved");
+    return true;
   } catch (error) {
     if (isDriveConflictError(error)) {
       console.warn(error.message || error);
       setSaveState("Sync needed");
-      return;
+      return false;
     }
     console.error(error);
     setSaveState("Save failed");
@@ -4167,6 +4340,7 @@ async function saveActiveExperiment() {
     } else {
       window.alert(error.message || String(error));
     }
+    return false;
   }
 }
 
@@ -4282,12 +4456,17 @@ async function route() {
 }
 
 async function init() {
+  if (driveSettings.clientId && driveSettings.backendUrl) {
+    warmBackend();
+    loadGoogleIdentityScript().catch(() => {});
+    driveState.status = "Drive not connected";
+  }
   db = await openDb();
   await seedIfEmpty();
   await loadExperiments();
   window.addEventListener("hashchange", route);
-  await tryAutoConnectBackend();
   await route();
+  await tryAutoConnectBackend();
 }
 
 init().catch((error) => {

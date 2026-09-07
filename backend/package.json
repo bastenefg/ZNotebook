@@ -9,6 +9,8 @@
   "scripts": {
     "start": "node server.js",
     "check": "node --check server.js && node --check tools/create-drive-refresh-token.js",
+    "test": "node --test test/*.test.js",
+    "benchmark:workspace": "node tools/benchmark-workspace.js",
     "create-drive-refresh-token": "node tools/create-drive-refresh-token.js"
   },
   "dependencies": {

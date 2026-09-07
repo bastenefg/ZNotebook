@@ -49,3 +49,23 @@ The repository can be public when hosted on GitHub Pages. The public app shell e
 ## Backend path
 
 The current backend uses Google Drive as the file store. If the notebook becomes heavily used, metadata can later move to Postgres or SQLite while keeping Drive or lab storage for attachments.
+
+Connection reads use up to six parallel record downloads. The backend rechecks Drive file versions on each connection/sync and reuses unchanged record bodies from a bounded in-memory cache. Folder listings follow every page. Existing files and the soft-delete format are unchanged; this update requires no Drive data migration.
+
+The frontend starts loading Google sign-in and warming the backend when opened, shares duplicate connection attempts, and prevents an old reconnect from clearing a newer session. Login reads `/workspace` without uploading the local notebook. Connection progress and retry controls are visible on mobile and desktop.
+
+## Regression checks
+
+With Node.js 20 or later:
+
+```powershell
+node --check app.js
+node --test tests/login.test.cjs
+npm --prefix backend run check
+npm --prefix backend test
+npm --prefix backend run benchmark:workspace
+```
+
+These tests use simulated Google/Drive responses and do not access the live notebook. Frontend changes must be published to GitHub Pages and backend changes deployed to Cloud Run for both sets of improvements to take effect; see the existing deployment guides. Keep the current Drive folder, access list, and storage credentials when redeploying.
+
+For desktop/mobile browser checks, run `node tests/browser-login.cjs` with Playwright installed (or set `PLAYWRIGHT_MODULE` to its installed path and `BROWSER_EXECUTABLE` to a Chromium browser). It intercepts all requests, tests the connection and retry UI at phone and desktop sizes, and writes screenshots to a temporary directory. The benchmark uses 24 fake records with simulated request latency; it is not a production timing measurement.
