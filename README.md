@@ -52,7 +52,15 @@ The current backend uses Google Drive as the file store. If the notebook becomes
 
 Connection reads use up to six parallel record downloads. The backend rechecks Drive file versions on each connection/sync and reuses unchanged record bodies from a bounded in-memory cache. Folder listings follow every page. Existing files and the soft-delete format are unchanged; this update requires no Drive data migration.
 
-The frontend starts loading Google sign-in and warming the backend when opened, shares duplicate connection attempts, and prevents an old reconnect from clearing a newer session. Login reads `/workspace` without uploading the local notebook. Connection progress and retry controls are visible on mobile and desktop.
+The frontend starts loading Google sign-in and warming the backend when opened, shares duplicate connection attempts, and prevents an old reconnect from clearing a newer session. Login reads `/workspace`; afterward it can retry explicitly queued record edits whose saved Drive version still matches. It does not upload unrelated local records or demo data. Connection progress and retry controls are visible on mobile and desktop.
+
+## Record save protection
+
+Record edits commit to IndexedDB together with a persistent pending-write entry before a network save starts. Navigation waits for local transactions, while network uploads are debounced and serialized. Only an acknowledgement for the saved revision can clear its pending entry. Browser database version 2 adds pending writes and workspace metadata without deleting version 1 records; existing cached records are retained as review drafts until an identical Drive copy is found or the user recovers them separately.
+
+Reconnect merges the remote snapshot with pending edits. Different remote versions require review, and the client never forces an overwrite. Recovery can download record JSON or create a separate recovered record while preserving the original Drive record. These downloads contain media references, not an independent attachment backup. Workspace reads and writes also use Web Locks when available to coordinate tabs in the same browser.
+
+This protects record edits, including submitted surgery changes. It does not yet provide durable configuration/section saves or atomic conflict protection between backend instances/devices. Two tabs editing the same pending draft also need additional protection. Local drafts depend on this browser's storage: clearing it, losing the device, or killing the browser before a transaction commits can still lose work. Independent backups remain necessary. No Drive migration, bulk rewrite, or attachment deletion is part of this change.
 
 ## Regression checks
 
@@ -60,6 +68,7 @@ With Node.js 20 or later:
 
 ```powershell
 node --check app.js
+node --check persistence.js
 node --test tests/login.test.cjs
 npm --prefix backend run check
 npm --prefix backend test
@@ -69,3 +78,5 @@ npm --prefix backend run benchmark:workspace
 These tests use simulated Google/Drive responses and do not access the live notebook. Frontend changes must be published to GitHub Pages and backend changes deployed to Cloud Run for both sets of improvements to take effect; see the existing deployment guides. Keep the current Drive folder, access list, and storage credentials when redeploying.
 
 For desktop/mobile browser checks, run `node tests/browser-login.cjs` with Playwright installed (or set `PLAYWRIGHT_MODULE` to its installed path and `BROWSER_EXECUTABLE` to a Chromium browser). It intercepts all requests, tests the connection and retry UI at phone and desktop sizes, and writes screenshots to a temporary directory. The benchmark uses 24 fake records with simulated request latency; it is not a production timing measurement.
+
+With the same Playwright setup, run `node --test tests/persistence.test.cjs` and `node tests/save-loss-browser.cjs`. These use real browser IndexedDB and synthetic records to exercise interrupted transactions, quota errors, navigation, offline reload, conflicts, migration, and delayed/lost network responses. Every app network request is intercepted; no production account, notebook, or Drive credentials are used.

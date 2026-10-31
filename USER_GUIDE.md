@@ -16,7 +16,7 @@ While connecting, a progress message appears below the navigation on phones and 
 
 The app reuses a saved Google sign-in while it is valid. If the connection is interrupted, click `Retry connection`; you do not need to choose your account again while that sign-in is valid. If you see `Sign-in expired`, sign in again. A slow or unavailable service shows an error instead of waiting indefinitely.
 
-Connecting opens the existing Drive notebook. It does not upload local-only records or demo data. Export a local JSON backup before switching to Drive if you need to retain a separate local notebook.
+Connecting opens the existing Drive notebook and retries pending edits made to that notebook when its Drive versions still match. It does not upload unrelated local-only records or demo data. Export a local JSON backup before switching to Drive if you need to retain a separate local notebook.
 
 ## Main Notebook View
 
@@ -78,7 +78,11 @@ Common things to add:
 - Results, images, videos, and interpretation
 - Next steps or follow-up questions
 
-The editor saves automatically. Watch the save indicator near the top of the page. If it says `Saving...`, wait a moment before closing. If it says `Sync needed` or `Save failed`, click `Sync` and check whether another user changed the same record.
+The editor saves automatically. `Saving on this device…` means the local save is still in progress. `Saved on this device — waiting for Drive` or `offline` means the record is stored in this browser but has not been confirmed by Drive. `Saved to Drive` means the backend confirmed the record save. Submitted surgery changes use the same protection.
+
+Pending drafts survive navigation and browser reloads. Reconnect or use `Sync` to retry them. Keep the device and browser data until Drive confirms the save. If local storage fails, keep the tab open and use `Retry saving` or `Download recovery file`; navigation is paused to protect the edits still in memory.
+
+If `Review drafts` appears, the Drive version changed or the app recovered an older browser copy with no known Drive version. Your local draft is preserved. You can download it or save it as a separate recovered record, then compare it with the original. This does not overwrite the original Drive record. Recovery JSON includes existing media references; it is not a full attachment backup. Avoid editing the same record in multiple tabs or devices until concurrent-edit protection is completed.
 
 ## Add Images and Videos
 

@@ -63,7 +63,7 @@ async function session(browser, width, { automatic = true, workspaceResponse } =
       const name = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
       if (name === "config.js") {
         await route.fulfill({ contentType: "application/javascript", body: `window.DEFINITELY_NOT_NOTION_CONFIG = ${JSON.stringify({ googleClientId: "test-client", backendUrl: backend })};` });
-      } else if (["index.html", "app.js", "styles.css"].includes(name)) {
+      } else if (["index.html", "app.js", "persistence.js", "styles.css"].includes(name)) {
         const body = fs.readFileSync(path.join(root, name), "utf8").replace(/<link rel="preconnect"[^>]*>/g, "");
         await route.fulfill({ body, contentType: name.endsWith(".js") ? "application/javascript" : name.endsWith(".css") ? "text/css" : "text/html" });
       } else if (name === "favicon.ico") {

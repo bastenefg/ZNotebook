@@ -1,5 +1,5 @@
 const DB_NAME = "labbook-db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = "experiments";
 const TAXONOMY_KEY = "labbook-taxonomy-v1";
 const DRIVE_SETTINGS_KEY = "definitely-not-notion-drive-v1";
@@ -118,6 +118,14 @@ let activeSurgery = null;
 let saveTimer = null;
 let editorImageResizeCleanup = null;
 const recordSaveQueues = new Map();
+const localSaveOperations = new Set();
+const failedLocalWrites = new Map();
+const latestLocalRevisions = new Map();
+let pendingDrafts = [];
+let renderedHash = "";
+let importedLocalOnly = (() => {
+  try { return localStorage.getItem("labbook-import-local-only") === "true"; } catch { return false; }
+})();
 let currentFilters = { search: "", showDeleted: false, showDeletedSections: false };
 let surgeryFilters = {
   search: "",
@@ -622,7 +630,7 @@ function openDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const database = request.result;
       if (!database.objectStoreNames.contains(STORE)) {
         const store = database.createObjectStore(STORE, { keyPath: "id" });
@@ -631,9 +639,32 @@ function openDb() {
         store.createIndex("outcome", "outcome");
         store.createIndex("updatedAt", "updatedAt");
       }
+      if (!database.objectStoreNames.contains("pendingWrites")) {
+        database.createObjectStore("pendingWrites", { keyPath: "key" });
+      }
+      if (!database.objectStoreNames.contains("workspaceMeta")) {
+        database.createObjectStore("workspaceMeta", { keyPath: "backendUrl" });
+      }
+      if (event.oldVersion === 1 && driveSettings.backendUrl && !importedLocalOnly) {
+        const previous = request.transaction.objectStore(STORE).getAll();
+        previous.onsuccess = () => {
+          const drafts = request.transaction.objectStore("pendingWrites");
+          previous.result.forEach((record) => drafts.put({
+            key: `${driveSettings.backendUrl}\n${record.id}`, backendUrl: driveSettings.backendUrl,
+            recordId: record.id, record, revision: uid(), baseModifiedTime: "", needsReview: true,
+            reason: "Recovered from the previous app version. Compare this device's copy with Drive before saving.",
+          }));
+        };
+      }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      request.result.onversionchange = () => request.result.close();
+      resolve(request.result);
+    };
+    request.onblocked = () => {
+      app.textContent = "Close other notebook tabs, then reload to finish updating local save protection.";
+    };
     request.onerror = () => reject(request.error);
   });
 }
@@ -660,9 +691,10 @@ function getExperiment(id) {
 
 function putExperiment(experiment) {
   return new Promise((resolve, reject) => {
-    const request = tx("readwrite").put(experiment);
-    request.onsuccess = () => resolve(experiment);
-    request.onerror = () => reject(request.error);
+    const transaction = db.transaction(STORE, "readwrite", { durability: "strict" });
+    transaction.objectStore(STORE).put(experiment);
+    transaction.oncomplete = () => resolve(experiment);
+    transaction.onabort = transaction.onerror = () => reject(transaction.error || new Error("Local save was interrupted."));
   });
 }
 
@@ -677,28 +709,108 @@ function replaceAllExperiments(records) {
     store.clear();
     records.forEach((record) => store.put(record));
     transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = transaction.onerror = () => reject(transaction.error || new Error("Local import was interrupted."));
   });
 }
 
-async function saveExperimentRecord(experiment) {
-  const recordId = String(experiment.id || "");
-  const snapshot = JSON.parse(JSON.stringify(experiment));
-  const previousSave = recordSaveQueues.get(recordId) || Promise.resolve();
-  const operation = previousSave.then(async () => {
-    if (driveState.connected) {
-      await driveSaveRecord(snapshot);
+function stageRecordSave(experiment) {
+  // Capture the record now; navigation and later edits must not change this write.
+  const record = JSON.parse(JSON.stringify(experiment));
+  const backendUrl = importedLocalOnly ? "" : driveSettings.backendUrl;
+  const revision = uid();
+  latestLocalRevisions.set(record.id, revision);
+  const draft = { key: `${backendUrl}\n${record.id}`, backendUrl, recordId: record.id, record, revision,
+    baseModifiedTime: Object.prototype.hasOwnProperty.call(driveState.recordModifiedTimes, record.id)
+      ? driveState.recordModifiedTimes[record.id] : undefined };
+  const operation = Promise.resolve().then(async () => {
+    try {
+      if (backendUrl) await NotebookPersistence.stageDraft(db, draft);
+      else await putExperiment(record);
+      if (latestLocalRevisions.get(record.id) === revision) failedLocalWrites.delete(record.id);
+      await refreshPendingDrafts();
+      await loadExperiments();
+    } catch (error) {
+      if (latestLocalRevisions.get(record.id) === revision) failedLocalWrites.set(record.id, { record, error });
+      throw error;
+    } finally {
+      localSaveOperations.delete(operation);
+      updateSaveUi();
     }
-    await putExperiment(snapshot);
   });
-  const trackedOperation = operation.finally(() => {
-    if (recordSaveQueues.get(recordId) === trackedOperation) {
-      recordSaveQueues.delete(recordId);
-    }
-  });
+  localSaveOperations.add(operation);
+  updateSaveUi();
+  return operation;
+}
 
-  recordSaveQueues.set(recordId, trackedOperation);
-  await trackedOperation;
+async function waitForLocalSaves() {
+  while (localSaveOperations.size) await Promise.allSettled([...localSaveOperations]);
+  return failedLocalWrites.size === 0;
+}
+
+async function refreshPendingDrafts() {
+  if (!db) return;
+  pendingDrafts = driveSettings.backendUrl ? await NotebookPersistence.getDrafts(db, driveSettings.backendUrl) : [];
+  updateSaveUi();
+}
+
+async function saveExperimentRecord(experiment) {
+  await stageRecordSave(experiment);
+  if (!importedLocalOnly) await flushRecordDraft(experiment.id);
+}
+
+function flushRecordDraft(recordId) {
+  const backendUrl = driveSettings.backendUrl;
+  const key = `${backendUrl}\n${recordId}`;
+  if (recordSaveQueues.has(key)) return recordSaveQueues.get(key);
+  if (!driveState.connected || driveState.connecting || driveState.readingWorkspace || importedLocalOnly) return Promise.resolve();
+  const session = driveState;
+  const credential = session.accessToken;
+  const operation = withWorkspaceLock(backendUrl, async () => {
+    while (driveState === session && session.connected && session.accessToken === credential && !session.connecting && !session.readingWorkspace) {
+      const draft = (await NotebookPersistence.getDrafts(db, backendUrl)).find((item) => item.key === key);
+      if (!draft || draft.needsReview) break;
+      try {
+        const saved = await driveSaveRecord(draft.record, draft.baseModifiedTime);
+        if (!saved?.modifiedTime) throw new Error("Drive did not confirm the save. Reconnect to check it safely.");
+        await NotebookPersistence.acknowledgeDraft(db, { key, revision: draft.revision, modifiedTime: saved.modifiedTime });
+        if (driveState === session && driveSettings.backendUrl === backendUrl) {
+          session.recordModifiedTimes[recordId] = saved.modifiedTime;
+        }
+      } catch (error) {
+        if (error.status === 409) {
+          await NotebookPersistence.updateDraftReview(db, { key, revision: draft.revision, reason: "The Drive copy changed. Your local draft is preserved." });
+          // Mark the latest revision too: typing during the request must not bypass a conflict.
+          const latest = (await NotebookPersistence.getDrafts(db, backendUrl)).find((item) => item.key === key);
+          if (latest) await NotebookPersistence.updateDraftReview(db, { key, revision: latest.revision, reason: "The Drive copy changed. Your local draft is preserved." });
+        } else if (driveState === session && session.accessToken === credential) {
+          handleDriveError(error, { notify: false });
+        }
+        break;
+      }
+    }
+  }).finally(async () => {
+    if (recordSaveQueues.get(key) === operation) recordSaveQueues.delete(key);
+    await refreshPendingDrafts();
+  });
+  recordSaveQueues.set(key, operation);
+  updateSaveUi();
+  return operation;
+}
+
+function withWorkspaceLock(backendUrl, action) {
+  // Coordinate snapshot reads and writes between tabs sharing this browser.
+  if (typeof navigator !== "undefined" && navigator.locks) {
+    return navigator.locks.request(`notebook-workspace:${backendUrl}`, action);
+  }
+  return Promise.resolve().then(action);
+}
+
+async function flushPendingWrites() {
+  if (!await waitForLocalSaves()) return false;
+  await refreshPendingDrafts();
+  // Serial uploads avoid a burst of Drive writes when an offline session reconnects.
+  for (const draft of pendingDrafts) await flushRecordDraft(draft.recordId);
+  return true;
 }
 
 async function markExperimentDeleted(experiment) {
@@ -1082,6 +1194,7 @@ function renderShell(content) {
       </div>
     </header>
     <section class="connection-feedback" data-connection-feedback role="status" aria-live="polite" aria-atomic="true"></section>
+    <section class="connection-feedback" data-save-feedback role="status" aria-live="polite" aria-atomic="true" hidden></section>
     ${
       terminationReminders.length
         ? `<div class="global-alerts">${terminationReminderMarkup(terminationReminders)}</div>`
@@ -1093,6 +1206,7 @@ function renderShell(content) {
   app.querySelector("[data-action='drive-sync']")?.addEventListener("click", syncDriveNow);
   app.querySelector("[data-action='backup']").addEventListener("click", openBackupDialog);
   updateConnectionUi();
+  updateSaveUi();
   app
     .querySelector("[data-action='dismiss-termination-reminders']")
     ?.addEventListener("click", () => {
@@ -1170,6 +1284,94 @@ function updateConnectionUi() {
     page.inert = busy;
     page.setAttribute("aria-busy", String(busy));
   }
+  updateSaveUi();
+}
+
+function recordSaveLabel(recordId) {
+  if (failedLocalWrites.has(recordId)) return "Not saved — keep this tab open";
+  if (localSaveOperations.size) return "Saving on this device…";
+  const draft = pendingDrafts.find((item) => item.recordId === recordId);
+  if (draft?.needsReview) return "Saved on this device — review needed";
+  if (draft) return driveState.connected ? "Saved on this device — waiting for Drive" : "Saved on this device — offline";
+  return driveState.connected ? "Saved to Drive" : "Saved on this device";
+}
+
+function updateSaveUi() {
+  const count = pendingDrafts.length;
+  const failed = failedLocalWrites.size > 0;
+  const review = pendingDrafts.some((draft) => draft.needsReview);
+  const title = failed ? "Local save failed — keep this tab open" : localSaveOperations.size
+    ? "Saving on this device…" : `${count} ${count === 1 ? "record is" : "records are"} waiting for Drive`;
+  const detail = failed ? "Your latest edits are still in memory. Retry saving or download a recovery file before closing."
+    : review ? "A Drive copy changed. Your draft is preserved on this device; review it before continuing."
+    : "These edits are stored in this browser. Keep this device until Drive confirms the save; clearing browser data removes local drafts.";
+  document.querySelectorAll("[data-save-feedback]").forEach((element) => {
+    element.hidden = !failed && !count && !localSaveOperations.size;
+    element.classList.toggle("is-active", !element.hidden);
+    element.classList.toggle("has-error", failed || review);
+    element.innerHTML = `<div class="connection-copy"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>
+      ${failed ? '<button class="btn ghost" data-retry-local>Retry saving</button>' : ""}
+      ${review ? '<button class="btn ghost" data-review-drafts>Review drafts</button>' : ""}
+      ${count || failed ? '<button class="btn ghost" data-export-drafts>Download recovery file</button>' : ""}`;
+    element.querySelector("[data-retry-local]")?.addEventListener("click", async () => {
+      await Promise.allSettled([...failedLocalWrites.values()].map(({ record }) => stageRecordSave(record)));
+      flushPendingWrites().catch(reportLocalSaveError);
+    });
+    element.querySelector("[data-review-drafts]")?.addEventListener("click", openDraftReview);
+    element.querySelector("[data-export-drafts]")?.addEventListener("click", exportPendingDrafts);
+  });
+  if (activeExperiment) setSaveState(recordSaveLabel(activeExperiment.id));
+  if (activeSurgery) setSurgerySaveState(recordSaveLabel(activeSurgery.id));
+}
+
+function downloadRecoveryFile(records) {
+  const blob = new Blob([JSON.stringify({ app: "INFUS Notebook", version: 1, exportedAt: now(), taxonomy, records }, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `infus-unsynced-records-${today()}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportPendingDrafts() {
+  await waitForLocalSaves();
+  const records = new Map(pendingDrafts.map((draft) => [draft.recordId, draft.record]));
+  failedLocalWrites.forEach(({ record }) => records.set(record.id, record));
+  downloadRecoveryFile([...records.values()]);
+}
+
+function openDraftReview() {
+  const dialog = document.createElement("div");
+  dialog.className = "dialog-backdrop";
+  dialog.innerHTML = `<div class="panel dialog"><h2>Preserved drafts</h2>
+    <p class="dialog-copy">These drafts differ from Drive. You can save each as a separate recovered record, then compare it with the original. The original Drive record stays unchanged. Recovery downloads contain record text and media references, not a complete photo backup.</p>
+    ${pendingDrafts.filter((draft) => draft.needsReview).map((draft) => `<div class="field-group"><strong>${escapeHtml(draft.record.title || "Untitled record")}</strong><span>${escapeHtml(draft.reason || "Review needed")}</span><button class="btn" data-recover-draft="${escapeHtml(draft.recordId)}">Save as a separate recovered record</button></div>`).join("")}
+    <div class="dialog-actions"><button class="btn ghost" data-dialog-close>Close</button></div></div>`;
+  document.body.appendChild(dialog);
+  wireDialogClose(dialog);
+  dialog.querySelectorAll("[data-recover-draft]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      if (!await waitForLocalSaves()) throw new Error("Retry the failed local save first.");
+      const draft = (await NotebookPersistence.getDrafts(db, driveSettings.backendUrl)).find((item) => item.recordId === button.dataset.recoverDraft);
+      if (!draft) return;
+      const copy = { ...draft.record, id: uid(), title: `${draft.record.title || "Untitled record"} (recovered copy)`, createdAt: now(), updatedAt: now() };
+      await stageRecordSave(copy);
+      // Retire only the revision we copied, and only after the copy is durable.
+      await NotebookPersistence.acknowledgeDraft(db, { key: draft.key, revision: draft.revision, modifiedTime: driveState.recordModifiedTimes[draft.recordId] || "" });
+      await refreshPendingDrafts();
+      await flushRecordDraft(copy.id);
+      dialog.remove();
+      if (driveState.connected) await syncDriveNow();
+      location.hash = `#/record/${copy.id}`;
+    } catch (error) {
+      reportLocalSaveError(error);
+      window.alert(error.message || String(error));
+    } finally {
+      button.disabled = false;
+    }
+  }));
 }
 
 function renderListPage() {
@@ -3573,7 +3775,7 @@ function openDriveDialog() {
         <button class="btn ghost" type="button" data-action="save-drive-setup">Save setup</button>
         ${
           driveState.connected
-            ? `<button class="btn ghost" type="button" data-action="drive-disconnect">Use local only</button>`
+            ? `<button class="btn ghost" type="button" data-action="drive-disconnect">Disconnect</button>`
             : ""
         }
       </div>
@@ -3588,7 +3790,7 @@ function openDriveDialog() {
     });
     dialog.querySelector("[data-action='show-drive-fields']").classList.add("hidden");
   });
-  dialog.querySelector("[data-action='save-drive-setup']").addEventListener("click", () => {
+  dialog.querySelector("[data-action='save-drive-setup']").addEventListener("click", async () => {
     const clientId = dialog.querySelector("#driveClientId")?.value.trim() || driveSettings.clientId;
     const backendUrl =
       dialog.querySelector("#driveBackendUrl")?.value.trim() || driveSettings.backendUrl;
@@ -3597,6 +3799,12 @@ function openDriveDialog() {
       return;
     }
     if (clientId !== driveSettings.clientId || backendUrl !== driveSettings.backendUrl) {
+      if (!await waitForLocalSaves()) return;
+      await refreshPendingDrafts();
+      if (pendingDrafts.length || recordSaveQueues.size) {
+        window.alert("Finish saving or recovering the pending drafts before changing the backend.");
+        return;
+      }
       rememberBackendCredential("");
       resetDriveState();
     }
@@ -3646,22 +3854,17 @@ function openBackupDialog() {
 
 async function exportNotebookBackup() {
   try {
-    if (activeExperiment) {
-      const editor = app.querySelector("[data-editor]");
-      if (editor) {
-        activeExperiment.updatedAt = now();
-        activeExperiment.content = prepareContentForSave(editor.innerHTML);
-        await putExperiment(activeExperiment);
-        await loadExperiments();
-      }
-    }
+    await waitForLocalSaves();
+    await loadExperiments();
+    const records = new Map(experiments.map((record) => [record.id, record]));
+    failedLocalWrites.forEach(({ record }) => records.set(record.id, record));
 
     const backup = {
       app: "INFUS Notebook",
       version: 1,
       exportedAt: now(),
       taxonomy,
-      records: experiments,
+      records: [...records.values()],
     };
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -3682,6 +3885,11 @@ async function importNotebookBackup(file) {
   if (!file) return;
 
   try {
+    if (!await waitForLocalSaves()) throw new Error("Retry the failed local save before importing.");
+    await refreshPendingDrafts();
+    if (pendingDrafts.length || recordSaveQueues.size || driveState.connecting || driveState.syncing) {
+      throw new Error("Finish saving or recovering pending drafts before importing a backup.");
+    }
     const parsed = JSON.parse(await file.text());
     const records = Array.isArray(parsed.records)
       ? parsed.records
@@ -3699,6 +3907,9 @@ async function importNotebookBackup(file) {
     );
     if (!confirmed) return;
 
+    rememberBackendCredential("");
+    importedLocalOnly = true;
+    localStorage.setItem("labbook-import-local-only", "true");
     if (driveState.connected || driveState.connecting || driveState.syncing) resetDriveState();
     localStorage.setItem(TAXONOMY_KEY, JSON.stringify(normalizeBackupTaxonomy(parsed.taxonomy)));
     taxonomy = loadTaxonomy();
@@ -3854,19 +4065,28 @@ function connectDrive(credential) {
   }, 8000);
   attempt.promise = (async () => {
     try {
-      const workspace = await backendConnectionRequest("/workspace", {
-        signal: attempt.controller.signal,
-        headers: { Authorization: `Bearer ${credential}` },
+      if (!await waitForLocalSaves()) throw new Error("Save or download the local edits before reconnecting.");
+      await Promise.allSettled([...recordSaveQueues.values()]);
+      if (connectionAttempt !== attempt) return;
+      await withWorkspaceLock(driveSettings.backendUrl, async () => {
+        if (connectionAttempt !== attempt) return;
+        const workspace = await backendConnectionRequest("/workspace", {
+          signal: attempt.controller.signal,
+          headers: { Authorization: `Bearer ${credential}` },
+        });
+        if (connectionAttempt !== attempt) return;
+        driveState.status = "Opening your notebook…";
+        updateConnectionUi();
+        await applyWorkspaceSnapshot(workspace);
       });
       if (connectionAttempt !== attempt) return;
-      driveState.status = "Opening your notebook…";
-      updateConnectionUi();
-      await applyWorkspaceSnapshot(workspace);
-      if (connectionAttempt !== attempt) return;
       driveState.connected = true;
+      importedLocalOnly = false;
+      localStorage.removeItem("labbook-import-local-only");
       driveState.status = "Drive connected";
       driveState.connecting = false;
       await route();
+      await flushPendingWrites();
       document.querySelector("[data-drive-dialog]")?.closest(".dialog-backdrop")?.remove();
     } catch (error) {
       if (connectionAttempt !== attempt) return;
@@ -3885,6 +4105,7 @@ function connectDrive(credential) {
 }
 
 async function tryAutoConnectBackend() {
+  if (importedLocalOnly) return;
   if (!driveSettings.backendUrl || !driveSettings.clientId) return;
   const credential = savedBackendCredential();
   if (!isJwtLikelyValid(credential)) return;
@@ -3916,15 +4137,29 @@ async function initializeDriveWorkspace() {
 async function loadDriveWorkspace() {
   const session = driveState;
   const credential = session.accessToken;
-  const workspace = await backendConnectionRequest("/workspace", {
-    headers: { Authorization: `Bearer ${credential}` },
-  });
-  if (driveState !== session || !session.connected || session.accessToken !== credential) return false;
-  await applyWorkspaceSnapshot(workspace);
-  return driveState === session && session.connected && session.accessToken === credential;
+  session.readingWorkspace = true;
+  try {
+    await Promise.allSettled([...recordSaveQueues.values()]);
+    return await withWorkspaceLock(driveSettings.backendUrl, async () => {
+      const workspace = await backendConnectionRequest("/workspace", {
+        headers: { Authorization: `Bearer ${credential}` },
+      });
+      if (driveState !== session || !session.connected || session.accessToken !== credential) return false;
+      await applyWorkspaceSnapshot(workspace);
+      return driveState === session && session.connected && session.accessToken === credential;
+    });
+  } finally {
+    session.readingWorkspace = false;
+  }
 }
 
 async function applyWorkspaceSnapshot(workspace) {
+  if (!await waitForLocalSaves()) throw new Error("Local edits could not be saved. Keep this tab open and retry the save.");
+  await NotebookPersistence.mergeSnapshot(db, {
+    backendUrl: driveSettings.backendUrl,
+    records: workspace?.records,
+    recordMeta: workspace?.recordMeta,
+  });
   if (workspace && workspace.taxonomy) {
     taxonomy = {
       statuses: Array.isArray(workspace.taxonomy.statuses) ? workspace.taxonomy.statuses : [],
@@ -3944,10 +4179,8 @@ async function applyWorkspaceSnapshot(workspace) {
     ]),
   );
 
-  if (Array.isArray(workspace?.records)) {
-    await replaceAllExperiments(workspace.records);
-    await loadExperiments();
-  }
+  await refreshPendingDrafts();
+  await loadExperiments();
 }
 
 async function syncDriveNow() {
@@ -3972,6 +4205,8 @@ async function syncDriveNow() {
     await Promise.all([...recordSaveQueues.values()]);
     if (driveState !== session || session.accessToken !== credential) return;
     if (!await loadDriveWorkspace()) return;
+    await flushPendingWrites();
+    if (driveState !== session || !session.connected || session.accessToken !== credential) return;
     driveState.status = `Synced ${new Date().toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
@@ -3996,38 +4231,25 @@ async function driveSaveConfig() {
   });
 }
 
-async function driveSaveRecord(experiment) {
+async function driveSaveRecord(experiment, baseModifiedTime) {
   if (!driveState.connected) return;
   const payload = {
     record: experiment,
-    lastKnownModifiedTime: driveState.recordModifiedTimes[experiment.id] || "",
+    lastKnownModifiedTime: baseModifiedTime || "",
     force: false,
   };
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BACKEND_CONNECT_TIMEOUT_MS);
   try {
-    const saved = await backendRequest(`/records/${encodeURIComponent(experiment.id)}`, {
+    return await backendRequest(`/records/${encodeURIComponent(experiment.id)}`, {
       method: "PUT",
+      signal: controller.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    driveState.recordModifiedTimes[experiment.id] = saved.modifiedTime || "";
-  } catch (error) {
-    if (error.status !== 409) throw error;
-    const overwrite = window.confirm(
-      `"${experiment.title}" changed in Google Drive since you last loaded it. Overwrite the Drive version with your current edits?`,
-    );
-    if (!overwrite) {
-      driveState.status = "Sync needed";
-      throw createDriveConflictError("Save cancelled to avoid overwriting newer Drive changes.");
-    }
-
-    payload.force = true;
-    const saved = await backendRequest(`/records/${encodeURIComponent(experiment.id)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    driveState.recordModifiedTimes[experiment.id] = saved.modifiedTime || "";
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -4312,36 +4534,26 @@ function setSaveState(label) {
 }
 
 function scheduleSave() {
-  setSaveState("Saving...");
+  if (!activeExperiment) return;
+  activeExperiment.updatedAt = now();
+  activeExperiment.content = prepareContentForSave(activeExperiment.content || "");
+  stageRecordSave(activeExperiment).catch(reportLocalSaveError);
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveActiveExperiment, 350);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    flushPendingWrites().catch(reportLocalSaveError);
+  }, 350);
 }
 
 async function saveActiveExperiment() {
+  clearTimeout(saveTimer);
   saveTimer = null;
-  if (!activeExperiment) return;
-  try {
-    activeExperiment.updatedAt = now();
-    activeExperiment.content = prepareContentForSave(activeExperiment.content || "");
-    await saveExperimentRecord(activeExperiment);
-    await loadExperiments();
-    setSaveState("Saved");
-    return true;
-  } catch (error) {
-    if (isDriveConflictError(error)) {
-      console.warn(error.message || error);
-      setSaveState("Sync needed");
-      return false;
-    }
-    console.error(error);
-    setSaveState("Save failed");
-    if (driveState.connected) {
-      handleDriveError(error);
-    } else {
-      window.alert(error.message || String(error));
-    }
-    return false;
-  }
+  return flushPendingWrites();
+}
+
+function reportLocalSaveError(error) {
+  console.error("Could not persist notebook changes", error);
+  updateSaveUi();
 }
 
 function openNewRecordDialog(sectionId) {
@@ -4412,11 +4624,12 @@ function collectLabelString(root) {
 }
 
 async function seedIfEmpty() {
+  if (driveSettings.backendUrl && !importedLocalOnly) return;
   const existing = await getAllExperiments();
   if (existing.some((record) => !isSurgeryRecord(record))) return;
 
   const section = sectionById(DEFAULT_SECTION_ID);
-  await saveExperimentRecord(
+  await putExperiment(
     createExperiment(section, {
       title: "Media condition pilot",
       startDate: today(),
@@ -4431,6 +4644,12 @@ async function seedIfEmpty() {
 }
 
 async function route() {
+  if (!await waitForLocalSaves()) {
+    if (renderedHash && location.hash !== renderedHash) location.hash = renderedHash;
+    updateSaveUi();
+    return;
+  }
+  renderedHash = location.hash || "#/";
   const hash = location.hash || "#/";
   if (hash.startsWith("#/surgery/")) {
     await renderSurgeryDetailPage(hash.replace("#/surgery/", ""));
@@ -4462,9 +4681,21 @@ async function init() {
     driveState.status = "Drive not connected";
   }
   db = await openDb();
+  const cachedMeta = driveSettings.backendUrl ? await NotebookPersistence.getWorkspaceMeta(db, driveSettings.backendUrl) : {};
+  driveState.recordModifiedTimes = Object.fromEntries(Object.entries(cachedMeta).map(([id, meta]) => [id, meta.modifiedTime || ""]));
+  await refreshPendingDrafts();
   await seedIfEmpty();
   await loadExperiments();
   window.addEventListener("hashchange", route);
+  window.addEventListener("beforeunload", (event) => {
+    if (localSaveOperations.size || failedLocalWrites.size || pendingDrafts.length) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushPendingWrites().catch(reportLocalSaveError);
+  });
   await route();
   await tryAutoConnectBackend();
 }

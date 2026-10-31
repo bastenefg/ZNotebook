@@ -219,6 +219,8 @@ textarea:focus-visible,
 
 .connection-feedback.is-active { display: flex; }
 .connection-feedback.has-error { color: #9a3d20; }
+[data-save-feedback][hidden] { display: none; }
+[data-save-feedback] { flex-wrap: wrap; }
 .connection-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .connection-copy strong, .connection-copy span { display: block; }
 .connection-copy strong { color: var(--ink); }
@@ -2265,6 +2267,7 @@ h1 {
   .connection-feedback, .connection-feedback.is-active { display: grid; grid-template-columns: 14px minmax(0, 1fr); padding: 10px 12px; }
   .connection-feedback .btn { min-height: 36px; }
   .connection-feedback [data-connection-retry] { grid-column: 2; justify-self: start; }
+  [data-save-feedback].connection-feedback { grid-template-columns: minmax(0, 1fr); }
   .dialog-connection:not(.is-active) { display: none; }
   .topbar {
     min-height: 60px;

@@ -228,7 +228,7 @@ test("connection feedback remains visible outside the compact mobile toolbar", a
   const connecting = env.context.connectDrive(credential("mobile-session"));
   await until(() => env.calls.length === 1, "mobile connection request");
   assert.equal(env.feedback.classList.contains("is-active"), true);
-  assert.match(env.feedback.innerHTML, /Connecting|Loading/);
+  assert.match(env.feedback.innerHTML, /Connecting|Loading/i);
   assert.equal(env.page.inert, true, "local edits cannot race with loading the shared snapshot");
   assert.equal(env.backupButton.disabled, true, "backup import cannot race with loading the shared snapshot");
   assert.equal(env.page.attributes["aria-busy"], "true");
