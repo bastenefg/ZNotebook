@@ -82,7 +82,9 @@ The editor saves automatically. `Saving on this device…` means the local save 
 
 Pending drafts survive navigation and browser reloads. Reconnect or use `Sync` to retry them. Keep the device and browser data until Drive confirms the save. If local storage fails, keep the tab open and use `Retry saving` or `Download recovery file`; navigation is paused to protect the edits still in memory.
 
-If `Review drafts` appears, the Drive version changed or the app recovered an older browser copy with no known Drive version. Your local draft is preserved. You can download it or save it as a separate recovered record, then compare it with the original. This does not overwrite the original Drive record. Recovery JSON includes existing media references; it is not a full attachment backup. Avoid editing the same record in multiple tabs or devices until concurrent-edit protection is completed.
+If `Review drafts` appears, the Drive version changed or the app recovered an older browser copy with no trustworthy Drive revision. Your local draft is preserved. You can download it or save it as a separate recovered record, then compare it with the original. This does not overwrite the original Drive record. Recovery JSON includes existing media references; it is not a full attachment backup.
+
+When two people save changes from the same record version, one save is accepted and the other is kept as a draft for review. The app does not automatically combine their text. Only one notebook tab per browser can edit; another tab shows `This tab is read-only`. After finishing saves in the first tab and closing it, choose `Enable editing` in the other tab to load the current saved copy. Keep browser data intact. An app update may ask you to reload older tabs after saving or downloading their pending work.
 
 ## Add Images and Videos
 

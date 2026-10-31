@@ -32,6 +32,7 @@ function element() {
     classList: { toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); }, contains: (name) => classes.has(name) },
     setAttribute(name, value) { this.attributes[name] = value; },
     querySelector: () => null,
+    querySelectorAll: () => [],
     addEventListener() {},
   };
 }
@@ -99,7 +100,7 @@ function harness(fetchImplementation) {
     __route: async () => { routeCount += 1; },
   });
   vm.runInContext(appSource, context, { filename: "app.js" });
-  vm.runInContext("applyWorkspaceSnapshot = __captureSnapshot; route = __route;", context);
+  vm.runInContext("editorLease.owned = true; editorLease.ready = true; applyWorkspaceSnapshot = __captureSnapshot; route = __route;", context);
   return {
     context, saved, calls, snapshots, feedback, storage, page, app, backupButton,
     state: () => vm.runInContext("driveState", context),

@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 // A fresh server with fake dependencies. Tests/benchmarks cannot authenticate,
 // open a listener, or make a real network/Drive request through this harness.
-function createServer() {
+function createServer({ env = {} } = {}) {
   const routes = new Map();
   const app = {
     disable() {}, use() {}, options() {}, listen() {},
@@ -32,9 +32,9 @@ function createServer() {
       if (name === "google-auth-library") return { GoogleAuth, OAuth2Client };
       throw new Error(`Unexpected dependency: ${name}`);
     },
-    process: { env: { DRIVE_FOLDER_ID: "root", GOOGLE_CLIENT_ID: "test-client" } },
+    process: { env: { DRIVE_FOLDER_ID: "root", GOOGLE_CLIENT_ID: "test-client", ...env } },
     console: { log() {}, error() {} },
-    Buffer, URLSearchParams,
+    Buffer, URL, URLSearchParams, setTimeout, clearTimeout,
     fetch: async () => { throw new Error("Unexpected network request in test"); },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../../server.js"), "utf8"), context);

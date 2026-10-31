@@ -16,6 +16,7 @@ const ALLOWED_DOMAIN = (process.env.ALLOWED_DOMAIN || "").trim().toLowerCase();
 const DRIVE_OWNER_CLIENT_ID = process.env.DRIVE_OWNER_CLIENT_ID || "";
 const DRIVE_OWNER_CLIENT_SECRET = process.env.DRIVE_OWNER_CLIENT_SECRET || "";
 const DRIVE_OWNER_REFRESH_TOKEN = process.env.DRIVE_OWNER_REFRESH_TOKEN || "";
+const RECORD_ID_REGISTRY_FILE_ID = (process.env.RECORD_ID_REGISTRY_FILE_ID || "").trim();
 
 const DRIVE_CONFIG_NAME = "definitely-not-notion.config.json";
 const DRIVE_RECORDS_FOLDER_NAME = "records";
@@ -25,6 +26,7 @@ const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 const DRIVE_READ_CONCURRENCY = 6;
 const RECORD_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 const RECORD_CACHE_MAX_ENTRIES = 1000;
+const DRIVE_REVISION_FIELDS = "id,title,mimeType,parents,etag,version,headRevisionId,modifiedDate";
 
 const driveAuthMode = driveOwnerOAuthConfigured() ? "storage-owner-oauth" : "service-account";
 const googleAuth = driveAuthMode === "service-account" ? new GoogleAuth({ scopes: [DRIVE_SCOPE] }) : null;
@@ -49,7 +51,7 @@ app.use(corsHeaders);
 app.options("*", (req, res) => res.status(204).end());
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true, app: "znotebook-api", driveAuthMode });
+  res.json({ ok: true, app: "znotebook-api", driveAuthMode, recordWriteProtocol: 2, recordCreationConfigured: Boolean(RECORD_ID_REGISTRY_FILE_ID) });
 });
 
 app.use(requireAllowedUser);
@@ -92,6 +94,10 @@ app.put("/config", async (req, res, next) => {
 
 app.put("/records/:id", async (req, res, next) => {
   try {
+    if (req.body?.writeProtocol !== 2 || typeof req.body?.baseRevision !== "string") {
+      throw recordConflict("This browser must reconnect with the current app before saving. Your local draft is preserved.");
+    }
+    if (req.body?.force) throw recordConflict("Forced record overwrites are disabled. Recover a separate copy instead.");
     const record = req.body?.record;
     if (!record || record.id !== req.params.id) {
       res.status(400).json({ error: "Record ID mismatch." });
@@ -102,7 +108,7 @@ app.put("/records/:id", async (req, res, next) => {
     const result = await upsertRecord(
       workspace.recordsFolderId,
       record,
-      req.body?.lastKnownModifiedTime || "",
+      req.body.baseRevision,
       Boolean(req.body?.force),
     );
     res.json(result);
@@ -302,22 +308,26 @@ async function readWorkspace(workspace) {
     driveListChildren(workspace.recordsFolderId),
   ]);
   const recordFiles = files.filter((item) => item.name.endsWith(".json"));
+  if (new Set(recordFiles.map((file) => file.name)).size !== recordFiles.length) {
+    throw recordConflict("Duplicate record filenames exist on Drive. No records were changed; an administrator must review them.");
+  }
   const contents = await mapWithConcurrency(recordFiles, DRIVE_READ_CONCURRENCY, readRecordFile);
   const records = [];
   const recordMeta = {};
 
   for (let index = 0; index < recordFiles.length; index += 1) {
     const file = recordFiles[index];
-    const record = contents[index];
+    const { record, meta } = contents[index];
     if (!record || !record.id) continue;
+    if (Object.prototype.hasOwnProperty.call(recordMeta, record.id)) {
+      throw recordConflict("More than one Drive file contains this record ID. No records were changed.");
+    }
     records.push(record);
-    recordMeta[record.id] = {
-      fileId: file.id,
-      modifiedTime: file.modifiedTime || "",
-    };
+    Object.defineProperty(recordMeta, record.id, { value: meta, enumerable: true });
   }
 
   return {
+    recordWriteProtocol: 2,
     taxonomy: config?.taxonomy || {},
     records,
     recordMeta,
@@ -346,10 +356,9 @@ async function mapWithConcurrency(items, concurrency, map) {
 async function readRecordFile(file) {
   // The folder is always listed first, so external edits are revalidated on
   // every sync. Version also detects edits that preserve modifiedTime.
-  const version = file.version ? `v:${file.version}` : file.modifiedTime;
-  if (!version) return driveReadJson(file.id);
+  const version = file.version ? `v:${file.version}` : "";
   const cached = recordCache.get(file.id);
-  if (cached?.version === version) {
+  if (version && cached?.version === version) {
     recordCache.delete(file.id);
     recordCache.set(file.id, cached);
     return cached.data;
@@ -358,15 +367,18 @@ async function readRecordFile(file) {
   const readKey = JSON.stringify([file.id, version]);
   if (recordReads.has(readKey)) return recordReads.get(readKey);
   const pending = (async () => {
-    const data = await driveReadJson(file.id);
+    // A metadata listing and an unconstrained media GET can refer to different
+    // revisions. Read this exact binary revision and return its paired token.
+    const { data: record, metadata } = await driveReadVersionedJson(file.id);
+    const data = { record, meta: recordMetadata(metadata) };
     const bytes = Buffer.byteLength(JSON.stringify(data) || "");
     invalidateRecordCache(file.id);
-    if (bytes <= RECORD_CACHE_MAX_BYTES) {
+    if (version && bytes <= RECORD_CACHE_MAX_BYTES) {
       while (recordCache.size &&
         (recordCacheBytes + bytes > RECORD_CACHE_MAX_BYTES || recordCache.size >= RECORD_CACHE_MAX_ENTRIES)) {
         invalidateRecordCache(recordCache.keys().next().value);
       }
-      recordCache.set(file.id, { version, data, bytes });
+      recordCache.set(file.id, { version: `v:${metadata.version}`, data, bytes });
       recordCacheBytes += bytes;
     }
     return data;
@@ -385,28 +397,119 @@ function invalidateRecordCache(fileId) {
   recordCache.delete(fileId);
 }
 
-async function upsertRecord(recordsFolderId, record, lastKnownModifiedTime = "", force = false) {
+function recordConflict(message = "Record changed on Drive since it was loaded. Your local draft is preserved.") {
+  const error = new Error(message);
+  error.status = 409;
+  return error;
+}
+
+function recordMetadata(metadata) {
+  if (!metadata?.id || !metadata.etag || !metadata.version || !metadata.headRevisionId ||
+      !/^"[^"\r\n]+"$/.test(metadata.etag)) {
+    const error = new Error("Drive did not provide a complete record revision. Saving is paused.");
+    error.status = 502;
+    throw error;
+  }
+  return {
+    fileId: metadata.id,
+    modifiedTime: metadata.modifiedDate || "",
+    revision: `d2.${Buffer.from(JSON.stringify([metadata.id, metadata.etag, String(metadata.version)])).toString("base64url")}`,
+  };
+}
+
+async function driveReadVersionedJson(fileId) {
+  const params = new URLSearchParams({ fields: DRIVE_REVISION_FIELDS, supportsAllDrives: "true" });
+  const metadata = await driveRequest(`https://www.googleapis.com/drive/v2/files/${encodeURIComponent(fileId)}?${params}`);
+  if (metadata.id !== fileId) throw recordConflict("Drive returned a different file identity. No save was attempted.");
+  recordMetadata(metadata); // Fail closed before a live-content fallback could be used.
+  const mediaParams = new URLSearchParams({ alt: "media", revisionId: metadata.headRevisionId, supportsAllDrives: "true" });
+  const data = await driveRequest(`https://www.googleapis.com/drive/v2/files/${encodeURIComponent(fileId)}?${mediaParams}`);
+  return { data, metadata };
+}
+
+async function upsertRecord(recordsFolderId, record, baseRevision = "", force = false) {
+  if (force || typeof baseRevision !== "string") throw recordConflict("Forced or unversioned overwrites are disabled.");
+  if (!record || typeof record.id !== "string" || !record.id || record.id.length > 512) {
+    const error = new Error("A valid record ID is required.");
+    error.status = 400;
+    throw error;
+  }
   const fileName = `${record.id}.json`;
   const existing = await driveFindChild(recordsFolderId, fileName);
 
   if (existing) {
-    if (
-      !force &&
-      lastKnownModifiedTime &&
-      existing.modifiedTime &&
-      existing.modifiedTime !== lastKnownModifiedTime
-    ) {
-      const error = new Error("Record changed on Drive since it was loaded.");
-      error.status = 409;
-      throw error;
-    }
-
-    const updated = await driveUpdateJson(existing.id, record);
-    return { ok: true, fileId: existing.id, modifiedTime: updated.modifiedTime || "" };
+    if (!baseRevision) throw recordConflict("This record already exists on Drive. Reconnect and review the local draft.");
+    const current = await driveReadVersionedJson(existing.id);
+    assertRecordLocation(current.metadata, recordsFolderId, fileName);
+    if (baseRevision !== recordMetadata(current.metadata).revision) throw recordConflict();
+    if (current.data?.id !== record.id) throw recordConflict("The Drive file contains a different record ID. No changes were made.");
+    const updated = await driveConditionalUpdateJson(existing.id, record, current.metadata);
+    return { ok: true, ...recordMetadata(updated) };
   }
 
-  const created = await driveCreateJson(recordsFolderId, fileName, record);
-  return { ok: true, fileId: created.id, modifiedTime: created.modifiedTime || "" };
+  if (baseRevision) throw recordConflict("The Drive record is missing or moved. It was not recreated; recover a separate copy instead.");
+  const fileId = await reserveRecordFileId(record.id);
+  try {
+    await driveCreateJson(recordsFolderId, fileName, record, fileId);
+  } catch (error) {
+    if (error.status !== 409) throw error;
+    // The winning create may have lost its response. Never PATCH on a retry.
+  }
+  const created = await driveReadVersionedJson(fileId);
+  assertRecordLocation(created.metadata, recordsFolderId, fileName);
+  if (!jsonEqual(created.data, record)) throw recordConflict("Another request created a different version of this record. Your draft is preserved.");
+  return { ok: true, ...recordMetadata(created.metadata) };
+}
+
+function assertRecordLocation(metadata, recordsFolderId, fileName) {
+  if (metadata.title !== fileName || !metadata.parents?.some((parent) => parent.id === recordsFolderId) || metadata.mimeType !== "application/json") {
+    throw recordConflict("The record file moved or changed identity on Drive. No save was attempted.");
+  }
+}
+
+function jsonEqual(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object" || Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) => Object.prototype.hasOwnProperty.call(right, key) && jsonEqual(left[key], right[key]));
+}
+
+async function reserveRecordFileId(recordId) {
+  if (!RECORD_ID_REGISTRY_FILE_ID) {
+    const error = new Error("New record creation is paused until the administrator configures RECORD_ID_REGISTRY_FILE_ID. Your local draft is preserved.");
+    error.status = 503;
+    error.expose = true;
+    throw error;
+  }
+  let generatedId;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const { data, metadata } = await driveReadVersionedJson(RECORD_ID_REGISTRY_FILE_ID);
+    if (metadata.mimeType !== "application/json" || data?.schema !== 1 || Object.keys(data).some((key) => !["schema", "records"].includes(key)) ||
+        !data.records || typeof data.records !== "object" || Array.isArray(data.records) ||
+        Object.values(data.records).some((value) => typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) ||
+        new Set(Object.values(data.records)).size !== Object.keys(data.records).length) {
+      throw new Error("The record ID registry is invalid. No record was created.");
+    }
+    if (Object.prototype.hasOwnProperty.call(data.records, recordId)) return data.records[recordId];
+    if (!generatedId) {
+      const generated = await driveRequest("https://www.googleapis.com/drive/v3/files/generateIds?count=1&space=drive&type=files");
+      generatedId = generated.ids?.[0];
+      if (typeof generatedId !== "string" || !/^[A-Za-z0-9_-]+$/.test(generatedId)) throw new Error("Drive did not reserve a valid file ID.");
+    }
+    const records = { ...data.records, [recordId]: generatedId };
+    try {
+      await driveConditionalUpdateJson(RECORD_ID_REGISTRY_FILE_ID, { schema: 1, records }, metadata);
+      return generatedId;
+    } catch (error) {
+      if (!error.drivePreconditionFailed) throw error;
+      // Retrying this metadata-only reservation is safe; record writes never
+      // adopt a fresh baseline automatically after a conflict.
+    }
+  }
+  const error = new Error("Record creation is busy. Retry after reconnecting; your draft is preserved.");
+  error.status = 503;
+  error.expose = true;
+  throw error;
 }
 
 async function driveEnsureFolder(parentId, name) {
@@ -430,12 +533,24 @@ async function driveFindChild(parentId, name, mimeType = "") {
   if (mimeType) filters.push(`mimeType = '${driveEscapeQuery(mimeType)}'`);
   const params = new URLSearchParams({
     q: filters.join(" and "),
-    fields: "files(id,name,mimeType,modifiedTime)",
+    fields: "nextPageToken,files(id,name,mimeType,modifiedTime,version)",
     supportsAllDrives: "true",
     includeItemsFromAllDrives: "true",
+    pageSize: "2",
   });
-  const result = await driveRequest(`https://www.googleapis.com/drive/v3/files?${params}`);
-  return result.files && result.files[0];
+  let found;
+  const seenPages = new Set();
+  do {
+    const result = await driveRequest(`https://www.googleapis.com/drive/v3/files?${params}`);
+    for (const file of result.files || []) {
+      if (found) throw recordConflict("Duplicate filenames exist on Drive. No file was selected or overwritten.");
+      found = file;
+    }
+    if (!result.nextPageToken) return found;
+    if (seenPages.has(result.nextPageToken)) throw new Error("Drive repeated a file lookup page.");
+    seenPages.add(result.nextPageToken);
+    params.set("pageToken", result.nextPageToken);
+  } while (true);
 }
 
 async function driveListChildren(parentId) {
@@ -465,9 +580,10 @@ async function driveReadJson(fileId) {
   );
 }
 
-async function driveCreateJson(parentId, name, data) {
+async function driveCreateJson(parentId, name, data, fileId = "") {
   const boundary = `znotebook_${Date.now()}`;
   const metadata = JSON.stringify({
+    ...(fileId ? { id: fileId } : {}),
     name,
     mimeType: "application/json",
     parents: [parentId],
@@ -494,6 +610,59 @@ async function driveCreateJson(parentId, name, data) {
       body,
     },
   );
+}
+
+async function driveConditionalUpdateJson(fileId, data, metadata) {
+  recordMetadata(metadata);
+  if (metadata.id !== fileId) throw recordConflict("The save revision belongs to another file.");
+  const body = Buffer.from(JSON.stringify(data, null, 2));
+  const params = new URLSearchParams({
+    uploadType: "resumable", newRevision: "true", supportsAllDrives: "true", fields: DRIVE_REVISION_FIELDS,
+  });
+  invalidateRecordCache(fileId);
+  try {
+    const initiation = await driveFetch(`https://www.googleapis.com/upload/drive/v2/files/${encodeURIComponent(fileId)}?${params}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": metadata.etag,
+        "X-Upload-Content-Type": "application/json",
+        "X-Upload-Content-Length": String(body.length),
+      },
+      body: "{}",
+    });
+    if (!initiation.ok) throw await conditionalWriteError(initiation);
+    const location = initiation.headers.get("location");
+    let uploadUrl;
+    try { uploadUrl = new URL(location); } catch { throw new Error("Drive did not return a valid upload session."); }
+    if (uploadUrl.origin !== "https://www.googleapis.com" || uploadUrl.username || uploadUrl.password ||
+        !uploadUrl.pathname.startsWith("/upload/drive/") || uploadUrl.hash) {
+      throw new Error("Drive returned an unexpected upload destination. No content was sent.");
+    }
+    const response = await driveFetch(uploadUrl.href, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "Content-Length": String(body.length), "If-Match": metadata.etag },
+      body,
+    });
+    if (!response.ok) throw await conditionalWriteError(response);
+    const updated = await response.json();
+    recordMetadata(updated);
+    if (updated.id !== fileId || updated.version === metadata.version || updated.etag === metadata.etag) {
+      throw new Error("Drive did not confirm a new revision. Reconnect before retrying.");
+    }
+    return updated;
+  } finally {
+    invalidateRecordCache(fileId);
+  }
+}
+
+async function conditionalWriteError(response) {
+  if (response.status === 412) {
+    const error = recordConflict();
+    error.drivePreconditionFailed = true;
+    return error;
+  }
+  return driveError(response);
 }
 
 async function driveCreateBinary(parentId, name, buffer, mimeType) {

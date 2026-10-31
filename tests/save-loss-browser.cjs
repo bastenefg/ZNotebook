@@ -34,13 +34,14 @@ const surgery = {
 };
 const pixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6Zt0AAAAASUVORK5CYII=", "base64");
 const fixture = {
+  recordWriteProtocol: 2,
   taxonomy: {
     statuses: [{ value: "in-progress", label: "In progress" }],
     outcomes: [{ value: "pending", label: "Pending" }],
     labels: [], sections: [{ id: "experiments", name: "Experiment", columns: [], customFields: [] }],
   },
   records: [original, untouched, archived],
-  recordMeta: Object.fromEntries([original, untouched, archived].map((record) => [record.id, { modifiedTime: "base-v1" }])),
+  recordMeta: Object.fromEntries([original, untouched, archived].map((record) => [record.id, { modifiedTime: "base-v1", revision: `revision-${record.id}-1` }])),
 };
 const clone = (value) => JSON.parse(JSON.stringify(value));
 function deferred() {
@@ -75,18 +76,22 @@ async function session(browser, { automatic = true, localOnly = false, seedV1, o
 
   function accept(payload) {
     assert.equal(payload.force, false, "save-loss recovery must never force-overwrite a record");
+    assert.equal(payload.writeProtocol, 2);
     const index = state.remote.records.findIndex((record) => record.id === payload.record.id);
     if (index >= 0) {
       assert.equal(payload.lastKnownModifiedTime, state.remote.recordMeta[payload.record.id].modifiedTime,
         "a retry must retain or deliberately advance the correct acknowledged baseline");
+      assert.equal(payload.baseRevision, state.remote.recordMeta[payload.record.id].revision, "a save must retain the exact acknowledged remote revision");
       state.remote.records[index] = clone(payload.record);
     } else {
       assert.equal(payload.lastKnownModifiedTime, "");
+      assert.equal(payload.baseRevision, "");
       state.remote.records.push(clone(payload.record));
     }
     const modifiedTime = `accepted-v${state.puts.length + 1}`;
-    state.remote.recordMeta[payload.record.id] = { modifiedTime };
-    return { ok: true, modifiedTime };
+    const revision = `revision-${payload.record.id}-${state.puts.length + 1}`;
+    state.remote.recordMeta[payload.record.id] = { modifiedTime, revision };
+    return { ok: true, modifiedTime, revision };
   }
 
   await context.route("**/*", async (route) => {
@@ -194,6 +199,22 @@ async function waitDraft(page, text) {
   const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   try {
     {
+      const legacy = clone(fixture);
+      delete legacy.recordWriteProtocol;
+      Object.values(legacy.recordMeta).forEach(meta => { delete meta.revision; });
+      const env = await session(browser, { workspace: legacy });
+      await openRecord(env.page);
+      await edit(env.page, "Preserve this draft until the backend is protected.");
+      await waitDraft(env.page, "Preserve this draft until the backend is protected.");
+      await env.page.waitForFunction(() => !driveState.connected && Boolean(driveState.error));
+      assert.equal(env.state.puts.length, 0, "the new frontend must not send writes to an unprotected backend");
+      assert.deepEqual(env.state.remote.records, legacy.records);
+      assert.match(await env.page.locator("[data-save-state]").innerText(), /device/);
+      await env.finish();
+      console.log("PASS an older backend cannot receive unprotected writes; the local draft remains intact");
+    }
+
+    {
       const env = await session(browser);
       await openRecord(env.page);
       await env.page.locator("[data-editor]").evaluate((editor) => {
@@ -254,6 +275,7 @@ async function waitDraft(page, text) {
       await env.page.waitForFunction(() => !driveState.connected && Boolean(driveState.error));
       env.state.remote.records[0].content = "<p>A colleague's newer work.</p>";
       env.state.remote.recordMeta[original.id].modifiedTime = "colleague-v2";
+      env.state.remote.recordMeta[original.id].revision = "colleague-revision-2";
       const putsBefore = env.state.puts.length;
       await env.page.evaluate(() => connectDrive(savedBackendCredential()));
       await connected(env.page);
@@ -364,7 +386,7 @@ async function waitDraft(page, text) {
     {
       const env = await session(browser, { automatic: false, localOnly: true, seedV1: fixture.records });
       const result = await env.page.evaluate(async () => ({ version: db.version, stores: Array.from(db.objectStoreNames), records: await getAllExperiments() }));
-      assert.equal(result.version, 2);
+      assert.equal(result.version, 3);
       assert.ok(result.stores.includes("pendingWrites"));
       assert.deepEqual(result.records.sort((a, b) => a.id.localeCompare(b.id)), clone(fixture.records).sort((a, b) => a.id.localeCompare(b.id)), "the migration retains all v1 records, including archived research");
       assert.equal(env.state.puts.length, 0);
@@ -375,7 +397,7 @@ async function waitDraft(page, text) {
     {
       const workspace = clone(fixture);
       workspace.records.push(clone(surgery));
-      workspace.recordMeta[surgery.id] = { modifiedTime: "base-v1" };
+      workspace.recordMeta[surgery.id] = { modifiedTime: "base-v1", revision: "surgery-revision-1" };
       let failFirst = true;
       const retryStarted = deferred();
       const retryHeld = deferred();

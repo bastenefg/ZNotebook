@@ -13,6 +13,7 @@ async function main() {
   }));
   const workspace = { recordsFolderId: "records", configFileId: "config" };
   let downloads = 0;
+  let metadataReads = 0;
   server.driveReadJson = async (id) => {
     await delay(latencyMs);
     if (id === "config") return { taxonomy: { category: ["Demo"] } };
@@ -20,6 +21,15 @@ async function main() {
     return { id, title: `Synthetic ${id}` };
   };
   server.driveListChildren = async () => { await delay(latencyMs); return files; };
+  server.driveReadVersionedJson = async (id) => {
+    metadataReads += 1;
+    await delay(latencyMs);
+    const file = files.find((item) => item.id === id);
+    return {
+      data: await server.driveReadJson(id),
+      metadata: { id, etag: `"${id}-1"`, version: "1", headRevisionId: `${id}-revision-1`, modifiedDate: file.modifiedTime },
+    };
+  };
 
   // Mirrors the original readWorkspace path: config, listing, then serial bodies.
   async function originalSerialRead() {
@@ -43,12 +53,14 @@ async function main() {
     ["After (warm cache)", () => server.readWorkspace(workspace)],
   ]) {
     downloads = 0;
+    metadataReads = 0;
     const start = performance.now();
     const snapshot = JSON.parse(JSON.stringify(await run()));
     const durationMs = Math.round(performance.now() - start);
     if (!baseline) baseline = snapshot;
-    assert.deepEqual(snapshot, baseline);
-    results.push({ path: label, durationMs, recordDownloads: downloads, records: snapshot.records.length });
+    assert.deepEqual(snapshot.records, baseline.records);
+    assert.deepEqual(snapshot.taxonomy, baseline.taxonomy);
+    results.push({ path: label, durationMs, recordDownloads: downloads, metadataReads, records: snapshot.records.length });
   }
   console.log("Synthetic local benchmark: 24 fake records, 25 ms per mocked Drive request. No live network/data.");
   console.table(results);

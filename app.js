@@ -1,5 +1,5 @@
 const DB_NAME = "labbook-db";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = "experiments";
 const TAXONOMY_KEY = "labbook-taxonomy-v1";
 const DRIVE_SETTINGS_KEY = "definitely-not-notion-drive-v1";
@@ -123,6 +123,7 @@ const failedLocalWrites = new Map();
 const latestLocalRevisions = new Map();
 let pendingDrafts = [];
 let renderedHash = "";
+const editorLease = { owned: false, ready: false, busy: false, supported: true, requiresReload: false, release: null, request: null };
 let importedLocalOnly = (() => {
   try { return localStorage.getItem("labbook-import-local-only") === "true"; } catch { return false; }
 })();
@@ -146,6 +147,8 @@ let driveState = {
   accessToken: "",
   assetObjectUrls: [],
   recordModifiedTimes: {},
+  recordRevisions: {},
+  recordWriteProtocol: 0,
   status: "Local only",
 };
 
@@ -267,6 +270,7 @@ function loadDriveSettings() {
 }
 
 function saveDriveSettings(settings) {
+  requireEditorLease();
   const hosted = window.DEFINITELY_NOT_NOTION_CONFIG || {};
   driveSettings = {
     clientId: settings.clientId || "",
@@ -302,6 +306,7 @@ function validFieldType(type) {
 }
 
 function saveTaxonomy() {
+  requireEditorLease();
   localStorage.setItem(TAXONOMY_KEY, JSON.stringify(taxonomy));
   if (driveState.connected) {
     driveSaveConfig().catch(handleDriveError);
@@ -659,7 +664,15 @@ function openDb() {
     };
 
     request.onsuccess = () => {
-      request.result.onversionchange = () => request.result.close();
+      request.result.onversionchange = () => {
+        request.result.close();
+        editorLease.ready = false;
+        editorLease.requiresReload = true;
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        connectionAttempt?.controller.abort();
+        updateEditorLeaseUi();
+      };
       resolve(request.result);
     };
     request.onblocked = () => {
@@ -690,6 +703,7 @@ function getExperiment(id) {
 }
 
 function putExperiment(experiment) {
+  requireEditorLease();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE, "readwrite", { durability: "strict" });
     transaction.objectStore(STORE).put(experiment);
@@ -703,6 +717,7 @@ function isDeletedRecord(record) {
 }
 
 function replaceAllExperiments(records) {
+  requireEditorLease();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE, "readwrite");
     const store = transaction.objectStore(STORE);
@@ -714,6 +729,7 @@ function replaceAllExperiments(records) {
 }
 
 function stageRecordSave(experiment) {
+  requireEditorLease();
   // Capture the record now; navigation and later edits must not change this write.
   const record = JSON.parse(JSON.stringify(experiment));
   const backendUrl = importedLocalOnly ? "" : driveSettings.backendUrl;
@@ -721,7 +737,9 @@ function stageRecordSave(experiment) {
   latestLocalRevisions.set(record.id, revision);
   const draft = { key: `${backendUrl}\n${record.id}`, backendUrl, recordId: record.id, record, revision,
     baseModifiedTime: Object.prototype.hasOwnProperty.call(driveState.recordModifiedTimes, record.id)
-      ? driveState.recordModifiedTimes[record.id] : undefined };
+      ? driveState.recordModifiedTimes[record.id] : undefined,
+    baseRevision: Object.prototype.hasOwnProperty.call(driveState.recordRevisions, record.id)
+      ? driveState.recordRevisions[record.id] : undefined };
   const operation = Promise.resolve().then(async () => {
     try {
       if (backendUrl) await NotebookPersistence.stageDraft(db, draft);
@@ -759,6 +777,7 @@ async function saveExperimentRecord(experiment) {
 }
 
 function flushRecordDraft(recordId) {
+  if (!canEditNotebook()) return Promise.resolve();
   const backendUrl = driveSettings.backendUrl;
   const key = `${backendUrl}\n${recordId}`;
   if (recordSaveQueues.has(key)) return recordSaveQueues.get(key);
@@ -766,15 +785,16 @@ function flushRecordDraft(recordId) {
   const session = driveState;
   const credential = session.accessToken;
   const operation = withWorkspaceLock(backendUrl, async () => {
-    while (driveState === session && session.connected && session.accessToken === credential && !session.connecting && !session.readingWorkspace) {
+    while (canEditNotebook() && driveState === session && session.connected && session.accessToken === credential && !session.connecting && !session.readingWorkspace) {
       const draft = (await NotebookPersistence.getDrafts(db, backendUrl)).find((item) => item.key === key);
       if (!draft || draft.needsReview) break;
       try {
-        const saved = await driveSaveRecord(draft.record, draft.baseModifiedTime);
-        if (!saved?.modifiedTime) throw new Error("Drive did not confirm the save. Reconnect to check it safely.");
-        await NotebookPersistence.acknowledgeDraft(db, { key, revision: draft.revision, modifiedTime: saved.modifiedTime });
+        const saved = await driveSaveRecord(draft.record, draft.baseRevision, draft.baseModifiedTime);
+        if (!saved?.modifiedTime || !saved?.revision) throw new Error("Drive did not confirm a protected save. Reconnect to check it safely.");
+        await NotebookPersistence.acknowledgeDraft(db, { key, revision: draft.revision, modifiedTime: saved.modifiedTime, remoteRevision: saved.revision });
         if (driveState === session && driveSettings.backendUrl === backendUrl) {
           session.recordModifiedTimes[recordId] = saved.modifiedTime;
+          session.recordRevisions[recordId] = saved.revision;
         }
       } catch (error) {
         if (error.status === 409) {
@@ -806,6 +826,7 @@ function withWorkspaceLock(backendUrl, action) {
 }
 
 async function flushPendingWrites() {
+  if (!canEditNotebook()) return false;
   if (!await waitForLocalSaves()) return false;
   await refreshPendingDrafts();
   // Serial uploads avoid a burst of Drive writes when an offline session reconnects.
@@ -1193,6 +1214,7 @@ function renderShell(content) {
         }</span></button>
       </div>
     </header>
+    <section class="connection-feedback is-active" data-editor-lease-feedback role="status" aria-live="polite" aria-atomic="true" hidden></section>
     <section class="connection-feedback" data-connection-feedback role="status" aria-live="polite" aria-atomic="true"></section>
     <section class="connection-feedback" data-save-feedback role="status" aria-live="polite" aria-atomic="true" hidden></section>
     ${
@@ -1232,6 +1254,8 @@ function resetDriveState(status = "Local only") {
     accessToken: "",
     assetObjectUrls: [],
     recordModifiedTimes: {},
+    recordRevisions: {},
+    recordWriteProtocol: 0,
     status,
   };
 }
@@ -1245,6 +1269,7 @@ function savedBackendCredential() {
 }
 
 function rememberBackendCredential(credential) {
+  if (!canEditNotebook()) return;
   try {
     if (credential) localStorage.setItem(BACKEND_CREDENTIAL_KEY, credential);
     else localStorage.removeItem(BACKEND_CREDENTIAL_KEY);
@@ -1285,6 +1310,109 @@ function updateConnectionUi() {
     page.setAttribute("aria-busy", String(busy));
   }
   updateSaveUi();
+  updateEditorLeaseUi();
+}
+
+function canEditNotebook() {
+  return editorLease.owned && editorLease.ready && !editorLease.requiresReload;
+}
+
+function requireEditorLease() {
+  if (!canEditNotebook()) {
+    const error = new Error("This tab is read-only. Enable editing in this tab before changing the notebook.");
+    error.readOnlyTab = true;
+    throw error;
+  }
+}
+
+function updateEditorLeaseUi() {
+  const readOnly = !canEditNotebook();
+  document.querySelectorAll("[data-editor-lease-feedback]").forEach((element) => {
+    element.hidden = !readOnly;
+    element.style.display = readOnly ? "flex" : "none";
+    const title = editorLease.requiresReload ? "A notebook update is available" : editorLease.busy ? "Opening editing in this tab…" : "This tab is read-only";
+    const detail = editorLease.requiresReload
+      ? "This tab's database connection was closed for an app update. Download any pending work before reloading."
+      : !editorLease.supported
+        ? "This browser cannot safely coordinate notebook tabs. Use a current browser that supports Web Locks to edit."
+        : "Another notebook tab may be editing. Close it, then enable editing here to load the latest saved draft. You can still browse this device's cached records.";
+    element.innerHTML = `<div class="connection-copy"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>
+      ${editorLease.supported && !editorLease.requiresReload ? `<button class="btn ghost" data-enable-editing ${editorLease.busy ? "disabled" : ""}>Enable editing</button>` : ""}`;
+    element.querySelector("[data-enable-editing]")?.addEventListener("click", () => enableEditingInThisTab().catch(reportLocalSaveError));
+  });
+  if (!readOnly) return;
+  // Preserve navigation and cached browsing while preventing form mutations.
+  // The same check is enforced at the mutation boundaries below.
+  document.querySelectorAll("#app input, #app textarea, #app select, .dialog-backdrop input, .dialog-backdrop textarea, .dialog-backdrop select").forEach((element) => {
+    if (element.matches("[data-surgery-search], [data-search], [data-surgery-sort], [data-surgery-show-deleted], [data-surgery-sort-direction], [data-show-deleted], [data-show-deleted-sections]")) return;
+    element.disabled = true;
+  });
+  document.querySelectorAll("#app [contenteditable]").forEach((element) => { element.contentEditable = "false"; });
+  document.querySelectorAll("#app button, .dialog-backdrop button").forEach((button) => {
+    if (button.matches("[data-enable-editing], [data-action='backup'], [data-action='export-backup'], [data-export-drafts], [data-dialog-close], [data-action='export-current'], [data-action='export-surgery'], [data-view-surgery-photo], [data-action='dismiss-termination-reminders'], [data-surgery-sort-direction]")) return;
+    button.disabled = true;
+  });
+  document.querySelectorAll("[data-google-signin]").forEach((element) => { element.hidden = true; });
+}
+
+async function acquireEditorLease() {
+  if (editorLease.owned) return true;
+  if (typeof navigator === "undefined" || !navigator.locks?.request) {
+    editorLease.supported = false;
+    return false;
+  }
+  return new Promise((resolve) => {
+    // The promise remains pending while this document owns the lease. Browser
+    // teardown releases it; no clock-based lease can expire under a suspended tab.
+    editorLease.request = navigator.locks.request("notebook-editor:labbook-db", { ifAvailable: true }, async (lock) => {
+      if (!lock) { resolve(false); return; }
+      editorLease.owned = true;
+      await new Promise((release) => { editorLease.release = release; resolve(true); });
+      editorLease.owned = false;
+      editorLease.ready = false;
+      editorLease.release = null;
+    }).catch((error) => {
+      editorLease.owned = false;
+      editorLease.ready = false;
+      console.warn("Notebook editing coordination is unavailable", error);
+      resolve(false);
+      updateEditorLeaseUi();
+    });
+  });
+}
+
+async function reloadEditorCache() {
+  driveSettings = loadDriveSettings();
+  taxonomy = loadTaxonomy();
+  try { importedLocalOnly = localStorage.getItem("labbook-import-local-only") === "true"; } catch { importedLocalOnly = false; }
+  resetDriveState(driveSettings.backendUrl ? "Drive not connected" : "Local only");
+  const metadata = driveSettings.backendUrl ? await NotebookPersistence.getWorkspaceMeta(db, driveSettings.backendUrl) : {};
+  driveState.recordModifiedTimes = Object.fromEntries(Object.entries(metadata).map(([id, meta]) => [id, meta.modifiedTime || ""]));
+  driveState.recordRevisions = Object.fromEntries(Object.entries(metadata).filter(([, meta]) => typeof meta.revision === "string").map(([id, meta]) => [id, meta.revision]));
+  await refreshPendingDrafts();
+  await loadExperiments();
+  activeExperiment = null;
+  activeSurgery = null;
+}
+
+async function enableEditingInThisTab() {
+  if (canEditNotebook()) return true;
+  if (editorLease.busy || editorLease.requiresReload) return false;
+  editorLease.busy = true;
+  editorLease.ready = false;
+  updateEditorLeaseUi();
+  try {
+    if (!await acquireEditorLease()) return false;
+    await reloadEditorCache();
+    editorLease.ready = true;
+    // Rerender from the new owner's cache before any field becomes editable.
+    await route();
+    await tryAutoConnectBackend();
+    return true;
+  } finally {
+    editorLease.busy = false;
+    updateEditorLeaseUi();
+  }
 }
 
 function recordSaveLabel(recordId) {
@@ -1322,6 +1450,7 @@ function updateSaveUi() {
   });
   if (activeExperiment) setSaveState(recordSaveLabel(activeExperiment.id));
   if (activeSurgery) setSurgerySaveState(recordSaveLabel(activeSurgery.id));
+  updateEditorLeaseUi();
 }
 
 function downloadRecoveryFile(records) {
@@ -1342,6 +1471,7 @@ async function exportPendingDrafts() {
 }
 
 function openDraftReview() {
+  requireEditorLease();
   const dialog = document.createElement("div");
   dialog.className = "dialog-backdrop";
   dialog.innerHTML = `<div class="panel dialog"><h2>Preserved drafts</h2>
@@ -1359,7 +1489,7 @@ function openDraftReview() {
       const copy = { ...draft.record, id: uid(), title: `${draft.record.title || "Untitled record"} (recovered copy)`, createdAt: now(), updatedAt: now() };
       await stageRecordSave(copy);
       // Retire only the revision we copied, and only after the copy is durable.
-      await NotebookPersistence.acknowledgeDraft(db, { key: draft.key, revision: draft.revision, modifiedTime: driveState.recordModifiedTimes[draft.recordId] || "" });
+      await NotebookPersistence.retireDraft(db, { key: draft.key, revision: draft.revision });
       await refreshPendingDrafts();
       await flushRecordDraft(copy.id);
       dialog.remove();
@@ -3323,7 +3453,7 @@ function bindDetailPage(section) {
     activeExperiment.content = editor.innerHTML;
     scheduleSave();
   });
-  bindEditorImageResizing(editor);
+  if (canEditNotebook()) bindEditorImageResizing(editor);
 
   app.querySelectorAll("[data-command]").forEach((button) => {
     button.addEventListener("click", () => runCommand(button.dataset.command));
@@ -3731,6 +3861,7 @@ function wireDialogClose(dialog, onClose = () => {}) {
 }
 
 function openDriveDialog() {
+  requireEditorLease();
   if (document.querySelector("[data-drive-dialog]")) return;
   warmBackend();
   const hasHostedConfig = Boolean(driveSettings.configuredByHost);
@@ -3850,6 +3981,7 @@ function openBackupDialog() {
     input.value = "";
     dialog.remove();
   });
+  updateEditorLeaseUi();
 }
 
 async function exportNotebookBackup() {
@@ -3882,6 +4014,7 @@ async function exportNotebookBackup() {
 }
 
 async function importNotebookBackup(file) {
+  requireEditorLease();
   if (!file) return;
 
   try {
@@ -4045,6 +4178,7 @@ async function renderBackendSignIn(container, dialog) {
 }
 
 function connectDrive(credential) {
+  try { requireEditorLease(); } catch (error) { return Promise.reject(error); }
   if (!driveSettings.clientId || !driveSettings.backendUrl) {
     return Promise.reject(new Error("Backend storage is not configured yet."));
   }
@@ -4105,6 +4239,7 @@ function connectDrive(credential) {
 }
 
 async function tryAutoConnectBackend() {
+  if (!canEditNotebook()) return;
   if (importedLocalOnly) return;
   if (!driveSettings.backendUrl || !driveSettings.clientId) return;
   const credential = savedBackendCredential();
@@ -4135,6 +4270,7 @@ async function initializeDriveWorkspace() {
 }
 
 async function loadDriveWorkspace() {
+  requireEditorLease();
   const session = driveState;
   const credential = session.accessToken;
   session.readingWorkspace = true;
@@ -4154,12 +4290,14 @@ async function loadDriveWorkspace() {
 }
 
 async function applyWorkspaceSnapshot(workspace) {
+  requireEditorLease();
   if (!await waitForLocalSaves()) throw new Error("Local edits could not be saved. Keep this tab open and retry the save.");
   await NotebookPersistence.mergeSnapshot(db, {
     backendUrl: driveSettings.backendUrl,
     records: workspace?.records,
     recordMeta: workspace?.recordMeta,
   });
+  driveState.recordWriteProtocol = workspace?.recordWriteProtocol === 2 ? 2 : 0;
   if (workspace && workspace.taxonomy) {
     taxonomy = {
       statuses: Array.isArray(workspace.taxonomy.statuses) ? workspace.taxonomy.statuses : [],
@@ -4178,12 +4316,16 @@ async function applyWorkspaceSnapshot(workspace) {
       String(meta.modifiedTime || ""),
     ]),
   );
+  driveState.recordRevisions = Object.fromEntries(
+    Object.entries(workspace?.recordMeta || {}).filter(([, meta]) => typeof meta.revision === "string").map(([id, meta]) => [id, meta.revision]),
+  );
 
   await refreshPendingDrafts();
   await loadExperiments();
 }
 
 async function syncDriveNow() {
+  if (!canEditNotebook()) return false;
   if (!driveState.connected || driveState.connecting || driveState.syncing) return;
   const session = driveState;
   const credential = session.accessToken;
@@ -4223,6 +4365,7 @@ async function syncDriveNow() {
 }
 
 async function driveSaveConfig() {
+  requireEditorLease();
   if (!driveState.connected) return;
   await backendRequest("/config", {
     method: "PUT",
@@ -4231,10 +4374,19 @@ async function driveSaveConfig() {
   });
 }
 
-async function driveSaveRecord(experiment, baseModifiedTime) {
+async function driveSaveRecord(experiment, baseRevision, baseModifiedTime) {
+  requireEditorLease();
   if (!driveState.connected) return;
+  if (driveState.recordWriteProtocol !== 2) {
+    throw new Error("The backend needs the simultaneous-edit protection update before this app can upload records. Your edits remain on this device.");
+  }
+  if (typeof baseRevision !== "string") {
+    throw new Error("Reconnect before saving: this draft needs the current Drive version for conflict protection. Your edits remain on this device.");
+  }
   const payload = {
     record: experiment,
+    writeProtocol: 2,
+    baseRevision,
     lastKnownModifiedTime: baseModifiedTime || "",
     force: false,
   };
@@ -4260,6 +4412,7 @@ async function driveDeleteRecord(id) {
 }
 
 async function driveUploadAsset(recordId, file) {
+  requireEditorLease();
   const form = new FormData();
   form.append("file", file, file.name || "asset");
   return backendRequest(`/records/${encodeURIComponent(recordId)}/assets`, {
@@ -4397,6 +4550,8 @@ async function backendConnectionRequest(path, options = {}) {
 }
 
 async function backendFetch(path, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  if (!["GET", "HEAD"].includes(method) || path === "/workspace") requireEditorLease();
   if (!driveSettings.backendUrl) throw new Error("Cloud Run backend URL is not configured.");
   return fetch(`${driveSettings.backendUrl}${path}`, {
     ...options,
@@ -4624,6 +4779,7 @@ function collectLabelString(root) {
 }
 
 async function seedIfEmpty() {
+  if (!canEditNotebook()) return;
   if (driveSettings.backendUrl && !importedLocalOnly) return;
   const existing = await getAllExperiments();
   if (existing.some((record) => !isSurgeryRecord(record))) return;
@@ -4675,15 +4831,14 @@ async function route() {
 }
 
 async function init() {
-  if (driveSettings.clientId && driveSettings.backendUrl) {
+  await acquireEditorLease();
+  db = await openDb();
+  await reloadEditorCache();
+  editorLease.ready = editorLease.owned;
+  if (canEditNotebook() && driveSettings.clientId && driveSettings.backendUrl) {
     warmBackend();
     loadGoogleIdentityScript().catch(() => {});
-    driveState.status = "Drive not connected";
   }
-  db = await openDb();
-  const cachedMeta = driveSettings.backendUrl ? await NotebookPersistence.getWorkspaceMeta(db, driveSettings.backendUrl) : {};
-  driveState.recordModifiedTimes = Object.fromEntries(Object.entries(cachedMeta).map(([id, meta]) => [id, meta.modifiedTime || ""]));
-  await refreshPendingDrafts();
   await seedIfEmpty();
   await loadExperiments();
   window.addEventListener("hashchange", route);
@@ -4694,7 +4849,7 @@ async function init() {
     }
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushPendingWrites().catch(reportLocalSaveError);
+    if (document.visibilityState === "hidden" && canEditNotebook()) flushPendingWrites().catch(reportLocalSaveError);
   });
   await route();
   await tryAutoConnectBackend();

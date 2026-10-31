@@ -14,6 +14,16 @@ function deferred() {
 
 const workspace = { recordsFolderId: "records", assetsFolderId: "assets", configFileId: "config" };
 const plain = (value) => JSON.parse(JSON.stringify(value));
+const metadata = (id, version = "1", modifiedDate = `time-${id}`) => ({
+  id, title: `${id}.json`, mimeType: "application/json", parents: [{ id: "records" }],
+  etag: `"${id}-${version}"`, version, headRevisionId: `${id}-revision-${version}`, modifiedDate,
+});
+function mockVersionedReads(server, getMetadata = metadata) {
+  server.driveReadVersionedJson = async (id) => {
+    const captured = getMetadata(id);
+    return { data: await server.driveReadJson(id), metadata: captured };
+  };
+}
 
 test("GET /workspace loads an existing notebook using only Drive reads", async () => {
   const { server, routes } = createServer();
@@ -25,6 +35,8 @@ test("GET /workspace loads an existing notebook using only Drive reads", async (
     let data;
     if (parsed.searchParams.get("alt") === "media") {
       data = parsed.pathname.endsWith("/config") ? { taxonomy: { saved: true } } : { id: "a", text: "Saved data" };
+    } else if (parsed.pathname === "/drive/v2/files/a") {
+      data = metadata("a", "1", "saved-time");
     } else {
       const query = parsed.searchParams.get("q");
       if (query.includes("name = 'records'")) data = { files: [{ id: "records" }] };
@@ -38,10 +50,11 @@ test("GET /workspace loads an existing notebook using only Drive reads", async (
     routes.get("GET /workspace")({}, { json: resolve }, reject);
   });
   assert.deepEqual(plain(snapshot), {
+    recordWriteProtocol: 2,
     taxonomy: { saved: true }, records: [{ id: "a", text: "Saved data" }],
-    recordMeta: { a: { fileId: "a", modifiedTime: "saved-time" } },
+    recordMeta: { a: plain(server.recordMetadata(metadata("a", "1", "saved-time"))) },
   });
-  assert.equal(requests.length, 6);
+  assert.equal(requests.length, 7);
   assert.ok(requests.every((request) => request.method === "GET"));
 });
 
@@ -66,6 +79,7 @@ test("workspace reads overlap config/listing, read six records at once, and pres
     active -= 1;
     return { id: id.replace("file-", ""), content: `Original ${id}` };
   };
+  mockVersionedReads(server, (id) => metadata(id, "1", `time-${id.replace("file-", "")}`));
   const pending = server.readWorkspace(workspace);
   assert.equal(listed, true, "listing starts before config returns");
   configGate.resolve();
@@ -75,7 +89,7 @@ test("workspace reads overlap config/listing, read six records at once, and pres
   const snapshot = plain(await pending);
   assert.equal(peak, 6);
   assert.deepEqual(snapshot.records.map((record) => record.id), files.map((_, index) => String(index)));
-  assert.deepEqual(snapshot.recordMeta["16"], { fileId: "file-16", modifiedTime: "time-16" });
+  assert.deepEqual(snapshot.recordMeta["16"], plain(server.recordMetadata(metadata("file-16", "1", "time-16"))));
   assert.deepEqual(snapshot.taxonomy, { category: ["Lab"] });
 });
 
@@ -94,6 +108,7 @@ test("warm snapshots revalidate metadata, reuse unchanged bodies, and pick up ex
     downloads.push(id);
     return id === "config" ? { taxonomy } : id === "a" ? bodyA : { id: "b" };
   };
+  mockVersionedReads(server, (id) => metadata(id, files.find((file) => file.id === id).version));
   await server.readWorkspace(workspace);
   await server.readWorkspace(workspace);
   assert.deepEqual(downloads, ["config", "a", "b", "config"]);
@@ -119,6 +134,7 @@ test("record bodies without a revision are never cached, and invalid records are
     recordReads += 1;
     return id === "a" ? { id: "a" } : {};
   };
+  mockVersionedReads(server);
   await server.readWorkspace(workspace);
   assert.deepEqual(plain((await server.readWorkspace(workspace)).records), [{ id: "a" }]);
   assert.equal(recordReads, 4);
@@ -129,6 +145,7 @@ test("concurrent record reads share downloads and failed downloads can be retrie
   const gate = deferred();
   let calls = 0;
   server.driveReadJson = async () => { calls += 1; return gate.promise; };
+  mockVersionedReads(server);
   const file = { id: "a", version: "1" };
   const first = server.readRecordFile(file);
   const second = server.readRecordFile(file);
@@ -137,7 +154,7 @@ test("concurrent record reads share downloads and failed downloads can be retrie
   const results = await Promise.allSettled([first, second]);
   assert.ok(results.every((result) => result.status === "rejected"));
   server.driveReadJson = async () => { calls += 1; return { id: "a", text: "Recovered" }; };
-  assert.equal((await server.readRecordFile(file)).text, "Recovered");
+  assert.equal((await server.readRecordFile(file)).record.text, "Recovered");
   assert.equal(calls, 2);
 });
 
@@ -150,6 +167,7 @@ test("a failed record download rejects the whole snapshot instead of returning p
     if (id === "b") throw new Error("Drive unavailable");
     return id === "config" ? {} : { id };
   };
+  mockVersionedReads(server);
   await assert.rejects(server.readWorkspace(workspace), /Drive unavailable/);
   server.driveReadJson = async (id) => id === "config" ? {} : { id };
   assert.deepEqual(plain((await server.readWorkspace(workspace)).records), [{ id: "a" }, { id: "b" }]);
@@ -159,21 +177,25 @@ test("an older in-flight download cannot make later metadata reuse stale record 
   const { server } = createServer();
   const oldGate = deferred();
   let calls = 0;
+  let version = "1";
   server.driveReadJson = async () => {
     calls += 1;
     return calls === 1 ? oldGate.promise : { id: "a", text: "new" };
   };
+  mockVersionedReads(server, (id) => metadata(id, version));
   const oldRead = server.readRecordFile({ id: "a", version: "1" });
-  assert.equal((await server.readRecordFile({ id: "a", version: "2" })).text, "new");
+  version = "2";
+  assert.equal((await server.readRecordFile({ id: "a", version: "2" })).record.text, "new");
   oldGate.resolve({ id: "a", text: "old" });
   await oldRead;
-  assert.equal((await server.readRecordFile({ id: "a", version: "2" })).text, "new");
+  assert.equal((await server.readRecordFile({ id: "a", version: "2" })).record.text, "new");
 });
 
 test("record cache evicts old entries at its memory/entry limits", async () => {
   const { server } = createServer();
   let calls = 0;
   server.driveReadJson = async (id) => { calls += 1; return { id }; };
+  mockVersionedReads(server);
   for (let index = 0; index < 1001; index += 1) {
     await server.readRecordFile({ id: String(index), version: "1" });
   }
@@ -265,17 +287,23 @@ test("simultaneous init requests seed an empty workspace only once; populated da
 test("writes still check fresh Drive metadata for conflicts even when a body is cached", async () => {
   const { server } = createServer();
   server.driveReadJson = async () => ({ id: "a", text: "cached" });
+  let currentMetadata = metadata("a", "1", "old");
+  mockVersionedReads(server, () => currentMetadata);
   await server.readRecordFile({ id: "a", version: "1", modifiedTime: "old" });
+  const staleRevision = server.recordMetadata(currentMetadata).revision;
+  currentMetadata = metadata("a", "2", "new");
   let writes = 0;
   server.driveFindChild = async () => ({ id: "a", modifiedTime: "new" });
-  server.driveRequest = async (url, options) => {
+  server.driveConditionalUpdateJson = async (id, record, expected) => {
     writes += 1;
-    assert.equal(options.method, "PATCH");
-    return { id: "a", modifiedTime: "saved" };
+    assert.equal(id, "a");
+    assert.equal(expected.etag, '"a-2"');
+    server.invalidateRecordCache(id);
+    return metadata("a", "3", "saved");
   };
-  await assert.rejects(server.upsertRecord("records", { id: "a" }, "old"), (error) => error.status === 409);
+  await assert.rejects(server.upsertRecord("records", { id: "a" }, staleRevision), (error) => error.status === 409);
   assert.equal(writes, 0);
-  const saved = await server.upsertRecord("records", { id: "a" }, "new");
+  const saved = await server.upsertRecord("records", { id: "a" }, server.recordMetadata(currentMetadata).revision);
   assert.equal(saved.modifiedTime, "saved");
   assert.equal(writes, 1);
   assert.equal(vm.runInContext('recordCache.has("a")', server), false);

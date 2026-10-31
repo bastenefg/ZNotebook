@@ -182,6 +182,24 @@ assets/
 
 Notebook and surgery metadata are both stored as individual JSON files in `records/`. Surgery-card and collection photos use the same private per-record folders under `assets/`; no additional Drive folder setup or backend deployment is required for the Surgeries feature.
 
+## Deploying simultaneous-record-edit protection
+
+This release changes both the frontend and backend write protocol. It must be deployed during a coordinated pause in edits: an older Cloud Run revision can still perform unconditional writes, and simply switching traffic does not stop its in-flight requests. Finish acknowledged saves or download pending drafts first. Keep all old writers paused until the new backend is serving all traffic and old write requests have finished/stopped. Publish the new frontend and have users reload before resuming edits. Do not clear browser storage.
+
+Create one new private registry JSON file in the notebook's top-level Drive folder (alongside config, never inside `records/`). This adds a metadata file; it does not rewrite or move existing research files. With the existing owner OAuth credentials and `DRIVE_FOLDER_ID` supplied only in the local process environment, run:
+
+```powershell
+node backend/tools/create-record-registry.js --create-new-registry
+```
+
+Record the returned `fileId` as the backend environment variable `RECORD_ID_REGISTRY_FILE_ID`. Use the existing registry ID on subsequent deployments; do not recreate or empty it. The file contains `{"schema":1,"records":{}}` initially and tracks reservations for newly created records. Retain it in full-folder backups. Existing records require no migration. If setup fails after an uncertain response, inspect for the newly created registry before rerunning; never replace an existing research/config file to obtain this registry.
+
+Deploy Cloud Run with the current credentials, allowlist, Drive folder and other settings preserved, adding only this variable with `--update-env-vars`. Stage and check the new revision before sending it traffic. `/health` must report `recordWriteProtocol:2` and `recordCreationConfigured:true`; the latter means an ID is configured, not that the registry's contents have been verified. Verify the new registry separately. A missing/invalid registry stops new record creation and preserves client drafts; it never falls back to unsafe creation. Records already on Drive can still use conditional updates.
+
+The frontend refuses record uploads when `/workspace` does not advertise protocol 2. The backend rejects older/unversioned and forced record writes. Old pending drafts without strong revision tokens may require `Review drafts` after upgrade, even when timestamps match. Coordinate settings/section edits separately: `/config` has not yet received the concurrent-write protection in this release.
+
+Do not roll back to the old unconditional-write backend while editors are active. Pause writes and drain requests before any rollback; preserve the registry, pending browser drafts and all existing Drive files. Validation should use isolated test records, never overwrite a real experiment as a smoke test.
+
 ## Recovery and Deletion Policy
 
 The app uses soft deletion. When a user deletes a record, the record JSON remains in Drive and gets a `deletedAt` timestamp. Users can restore it from `Show deleted records`.
