@@ -51,7 +51,7 @@ app.use(corsHeaders);
 app.options("*", (req, res) => res.status(204).end());
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true, app: "znotebook-api", driveAuthMode, recordWriteProtocol: 2, recordCreationConfigured: Boolean(RECORD_ID_REGISTRY_FILE_ID) });
+  res.json({ ok: true, app: "znotebook-api", driveAuthMode, recordWriteProtocol: 2, recordRevisionFormat: 3, recordCreationConfigured: Boolean(RECORD_ID_REGISTRY_FILE_ID) });
 });
 
 app.use(requireAllowedUser);
@@ -413,7 +413,13 @@ function recordMetadata(metadata) {
   return {
     fileId: metadata.id,
     modifiedTime: metadata.modifiedDate || "",
-    revision: `d2.${Buffer.from(JSON.stringify([metadata.id, metadata.etag, String(metadata.version)])).toString("base64url")}`,
+    // Drive's numeric version can advance after a successful upload without
+    // changing the content revision or ETag. It is useful for cache validation,
+    // but including it in a write baseline creates false edit conflicts.
+    revision: `d3.${Buffer.from(JSON.stringify([metadata.id, metadata.etag, metadata.headRevisionId])).toString("base64url")}`,
+    // Only an exact legacy baseline may be migrated. Never infer safety from
+    // the old ETag or timestamp alone when a pending d2 token no longer matches.
+    legacyRevision: `d2.${Buffer.from(JSON.stringify([metadata.id, metadata.etag, String(metadata.version)])).toString("base64url")}`,
   };
 }
 
@@ -441,7 +447,8 @@ async function upsertRecord(recordsFolderId, record, baseRevision = "", force = 
     if (!baseRevision) throw recordConflict("This record already exists on Drive. Reconnect and review the local draft.");
     const current = await driveReadVersionedJson(existing.id);
     assertRecordLocation(current.metadata, recordsFolderId, fileName);
-    if (baseRevision !== recordMetadata(current.metadata).revision) throw recordConflict();
+    const currentRevision = recordMetadata(current.metadata);
+    if (baseRevision !== currentRevision.revision && baseRevision !== currentRevision.legacyRevision) throw recordConflict();
     if (current.data?.id !== record.id) throw recordConflict("The Drive file contains a different record ID. No changes were made.");
     const updated = await driveConditionalUpdateJson(existing.id, record, current.metadata);
     return { ok: true, ...recordMetadata(updated) };

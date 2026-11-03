@@ -8,6 +8,7 @@ const TERMINATION_REMINDER_KEY = "infus-termination-reminders-dismissed-v1";
 const TERMINATION_REMINDER_WINDOW_DAYS = 2;
 const BACKEND_CONNECT_RETRY_DELAY_MS = 900;
 const BACKEND_CONNECT_TIMEOUT_MS = 45000;
+const AUTO_SYNC_RETRY_DELAYS_MS = [2000, 5000, 10000, 30000, 60000];
 const EDITOR_IMAGE_MIN_WIDTH = 120;
 const EDITOR_IMAGE_MAX_STORED_WIDTH = 4096;
 const DEFAULT_SECTION_ID = "experiments";
@@ -122,6 +123,7 @@ const localSaveOperations = new Set();
 const failedLocalWrites = new Map();
 const latestLocalRevisions = new Map();
 let pendingDrafts = [];
+const automaticSync = { timer: null, running: false, failures: 0, reconcile: false, blocked: false };
 let renderedHash = "";
 const editorLease = { owned: false, ready: false, busy: false, supported: true, requiresReload: false, release: null, request: null };
 let importedLocalOnly = (() => {
@@ -769,6 +771,7 @@ async function refreshPendingDrafts() {
   if (!db) return;
   pendingDrafts = driveSettings.backendUrl ? await NotebookPersistence.getDrafts(db, driveSettings.backendUrl) : [];
   updateSaveUi();
+  scheduleAutomaticSync();
 }
 
 async function saveExperimentRecord(experiment) {
@@ -789,7 +792,11 @@ function flushRecordDraft(recordId) {
       const draft = (await NotebookPersistence.getDrafts(db, backendUrl)).find((item) => item.key === key);
       if (!draft || draft.needsReview) break;
       try {
-        const saved = await driveSaveRecord(draft.record, draft.baseRevision, draft.baseModifiedTime);
+        // Persist the exact attempted bytes before sending. A lost response can
+        // then be reconciled with Drive without treating our own save as a conflict.
+        const attempted = await NotebookPersistence.markDraftAttempt(db, { key, revision: draft.revision });
+        if (!attempted) continue;
+        const saved = await driveSaveRecord(attempted.record, attempted.baseRevision, attempted.baseModifiedTime);
         if (!saved?.modifiedTime || !saved?.revision) throw new Error("Drive did not confirm a protected save. Reconnect to check it safely.");
         await NotebookPersistence.acknowledgeDraft(db, { key, revision: draft.revision, modifiedTime: saved.modifiedTime, remoteRevision: saved.revision });
         if (driveState === session && driveSettings.backendUrl === backendUrl) {
@@ -798,6 +805,7 @@ function flushRecordDraft(recordId) {
         }
       } catch (error) {
         if (error.status === 409) {
+          automaticSync.reconcile = true;
           await NotebookPersistence.updateDraftReview(db, { key, revision: draft.revision, reason: "The Drive copy changed. Your local draft is preserved." });
           // Mark the latest revision too: typing during the request must not bypass a conflict.
           const latest = (await NotebookPersistence.getDrafts(db, backendUrl)).find((item) => item.key === key);
@@ -832,6 +840,74 @@ async function flushPendingWrites() {
   // Serial uploads avoid a burst of Drive writes when an offline session reconnects.
   for (const draft of pendingDrafts) await flushRecordDraft(draft.recordId);
   return true;
+}
+
+function automaticSyncEligible() {
+  return canEditNotebook() && !importedLocalOnly && !automaticSync.blocked &&
+    Boolean(driveSettings.backendUrl && driveSettings.clientId) &&
+    document.visibilityState !== "hidden" &&
+    (typeof navigator === "undefined" || navigator.onLine !== false) &&
+    isJwtLikelyValid(savedBackendCredential()) &&
+    pendingDrafts.some((draft) => !draft.needsReview || automaticSync.reconcile);
+}
+
+function scheduleAutomaticSync({ immediate = false } = {}) {
+  if (!automaticSyncEligible()) {
+    if (automaticSync.timer !== null) window.clearTimeout(automaticSync.timer);
+    automaticSync.timer = null;
+    if (!pendingDrafts.length) automaticSync.failures = 0;
+    return;
+  }
+  if (automaticSync.running) return;
+  if (automaticSync.timer !== null) {
+    if (!immediate) return;
+    window.clearTimeout(automaticSync.timer);
+  }
+  const delay = immediate ? 0 : AUTO_SYNC_RETRY_DELAYS_MS[Math.min(automaticSync.failures, AUTO_SYNC_RETRY_DELAYS_MS.length - 1)];
+  automaticSync.timer = window.setTimeout(() => {
+    automaticSync.timer = null;
+    runAutomaticSync().catch((error) => console.warn("Automatic sync paused", error));
+  }, delay);
+}
+
+async function runAutomaticSync() {
+  if (automaticSync.running || !automaticSyncEligible()) return;
+  if (driveState.connecting || driveState.syncing || recordSaveQueues.size) {
+    scheduleAutomaticSync();
+    return;
+  }
+  automaticSync.running = true;
+  const session = driveState;
+  const credential = session.accessToken;
+  try {
+    if (!driveState.connected) {
+      // Always read before retrying an interrupted upload: it may have committed.
+      await connectDrive(savedBackendCredential(), { background: true });
+    } else {
+      if (automaticSync.reconcile) {
+        if (!await loadDriveWorkspace({ background: true })) return;
+        automaticSync.reconcile = false;
+      }
+      await flushPendingWrites();
+    }
+  } catch (error) {
+    if (driveState === session && session.connected && session.accessToken === credential) handleDriveError(error, { notify: false });
+    // connectDrive already preserves drafts and records the connection error.
+    console.warn("Automatic sync will resume when the connection is available", error);
+  } finally {
+    automaticSync.running = false;
+    scheduleAutomaticSync();
+    updateSaveUi();
+  }
+}
+
+async function retryPendingSync() {
+  if (!canEditNotebook()) return;
+  automaticSync.blocked = false;
+  automaticSync.failures = 0;
+  if (!isJwtLikelyValid(savedBackendCredential())) return openDriveDialog();
+  automaticSync.reconcile = true;
+  scheduleAutomaticSync({ immediate: true });
 }
 
 async function markExperimentDeleted(experiment) {
@@ -1243,6 +1319,11 @@ function revokeDriveObjectUrls() {
 }
 
 function resetDriveState(status = "Local only") {
+  if (automaticSync.timer !== null) window.clearTimeout(automaticSync.timer);
+  automaticSync.timer = null;
+  automaticSync.reconcile = false;
+  automaticSync.blocked = false;
+  automaticSync.failures = 0;
   connectionAttempt?.controller.abort();
   connectionAttempt = null;
   revokeDriveObjectUrls();
@@ -1306,8 +1387,9 @@ function updateConnectionUi() {
   // Do not allow edits to race with replacement of the local Drive snapshot.
   const page = app.querySelector("main");
   if (page) {
-    page.inert = busy;
-    page.setAttribute("aria-busy", String(busy));
+    const blocksEditing = busy && !connectionAttempt?.background;
+    page.inert = blocksEditing;
+    page.setAttribute("aria-busy", String(blocksEditing));
   }
   updateSaveUi();
   updateEditorLeaseUi();
@@ -1420,7 +1502,9 @@ function recordSaveLabel(recordId) {
   if (localSaveOperations.size) return "Saving on this device…";
   const draft = pendingDrafts.find((item) => item.recordId === recordId);
   if (draft?.needsReview) return "Saved on this device — review needed";
-  if (draft) return driveState.connected ? "Saved on this device — waiting for Drive" : "Saved on this device — offline";
+  if (draft) return recordSaveQueues.has(`${driveSettings.backendUrl}\n${recordId}`)
+    ? "Saved on this device — uploading to Drive…"
+    : driveState.connected ? "Saved on this device — waiting for Drive" : "Saved on this device — not yet on Drive";
   return driveState.connected ? "Saved to Drive" : "Saved on this device";
 }
 
@@ -1428,11 +1512,15 @@ function updateSaveUi() {
   const count = pendingDrafts.length;
   const failed = failedLocalWrites.size > 0;
   const review = pendingDrafts.some((draft) => draft.needsReview);
+  const uploading = recordSaveQueues.size > 0;
   const title = failed ? "Local save failed — keep this tab open" : localSaveOperations.size
-    ? "Saving on this device…" : `${count} ${count === 1 ? "record is" : "records are"} waiting for Drive`;
+    ? "Saving on this device…" : uploading ? "Uploading saved edits to Drive…"
+    : review ? "Review needed — some edits are not on Drive" : `${count} ${count === 1 ? "record is" : "records are"} waiting for Drive`;
   const detail = failed ? "Your latest edits are still in memory. Retry saving or download a recovery file before closing."
     : review ? "A Drive copy changed. Your draft is preserved on this device; review it before continuing."
-    : "These edits are stored in this browser. Keep this device until Drive confirms the save; clearing browser data removes local drafts.";
+    : !isJwtLikelyValid(savedBackendCredential()) ? "These edits are stored in this browser. Sign in to upload them to Drive and make them available on your other devices."
+    : automaticSync.blocked ? "These edits are stored in this browser. Sync now to retry, or download a recovery file."
+    : "These edits are stored in this browser. Sync retries automatically when the notebook is open and online. Wait for Saved to Drive before switching devices.";
   document.querySelectorAll("[data-save-feedback]").forEach((element) => {
     element.hidden = !failed && !count && !localSaveOperations.size;
     element.classList.toggle("is-active", !element.hidden);
@@ -1440,12 +1528,14 @@ function updateSaveUi() {
     element.innerHTML = `<div class="connection-copy"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>
       ${failed ? '<button class="btn ghost" data-retry-local>Retry saving</button>' : ""}
       ${review ? '<button class="btn ghost" data-review-drafts>Review drafts</button>' : ""}
+      ${count ? `<button class="btn ghost" data-sync-pending ${driveState.connecting || driveState.syncing || uploading ? "disabled" : ""}>${isJwtLikelyValid(savedBackendCredential()) ? "Sync now" : "Sign in to save"}</button>` : ""}
       ${count || failed ? '<button class="btn ghost" data-export-drafts>Download recovery file</button>' : ""}`;
     element.querySelector("[data-retry-local]")?.addEventListener("click", async () => {
       await Promise.allSettled([...failedLocalWrites.values()].map(({ record }) => stageRecordSave(record)));
       flushPendingWrites().catch(reportLocalSaveError);
     });
     element.querySelector("[data-review-drafts]")?.addEventListener("click", openDraftReview);
+    element.querySelector("[data-sync-pending]")?.addEventListener("click", retryPendingSync);
     element.querySelector("[data-export-drafts]")?.addEventListener("click", exportPendingDrafts);
   });
   if (activeExperiment) setSaveState(recordSaveLabel(activeExperiment.id));
@@ -4177,15 +4267,16 @@ async function renderBackendSignIn(container, dialog) {
   }
 }
 
-function connectDrive(credential) {
+function connectDrive(credential, { background = false } = {}) {
   try { requireEditorLease(); } catch (error) { return Promise.reject(error); }
   if (!driveSettings.clientId || !driveSettings.backendUrl) {
     return Promise.reject(new Error("Backend storage is not configured yet."));
   }
   if (connectionAttempt?.credential === credential) return connectionAttempt.promise;
   connectionAttempt?.controller.abort();
-  const attempt = { credential, controller: new AbortController(), promise: null };
+  const attempt = { credential, background, controller: new AbortController(), promise: null };
   connectionAttempt = attempt;
+  if (!background) { automaticSync.blocked = false; automaticSync.failures = 0; }
   rememberBackendCredential(credential);
   driveState.accessToken = credential;
   driveState.connecting = true;
@@ -4211,7 +4302,8 @@ function connectDrive(credential) {
         if (connectionAttempt !== attempt) return;
         driveState.status = "Opening your notebook…";
         updateConnectionUi();
-        await applyWorkspaceSnapshot(workspace);
+        await applyWorkspaceSnapshot(workspace, { preserveEditor: background });
+        automaticSync.reconcile = false;
       });
       if (connectionAttempt !== attempt) return;
       driveState.connected = true;
@@ -4219,7 +4311,7 @@ function connectDrive(credential) {
       localStorage.removeItem("labbook-import-local-only");
       driveState.status = "Drive connected";
       driveState.connecting = false;
-      await route();
+      if (!background) await route();
       await flushPendingWrites();
       document.querySelector("[data-drive-dialog]")?.closest(".dialog-backdrop")?.remove();
     } catch (error) {
@@ -4232,6 +4324,7 @@ function connectDrive(credential) {
         connectionAttempt = null;
         driveState.connecting = false;
         updateConnectionUi();
+        scheduleAutomaticSync();
       }
     }
   })();
@@ -4269,7 +4362,7 @@ async function initializeDriveWorkspace() {
   return null;
 }
 
-async function loadDriveWorkspace() {
+async function loadDriveWorkspace({ background = false } = {}) {
   requireEditorLease();
   const session = driveState;
   const credential = session.accessToken;
@@ -4281,7 +4374,7 @@ async function loadDriveWorkspace() {
         headers: { Authorization: `Bearer ${credential}` },
       });
       if (driveState !== session || !session.connected || session.accessToken !== credential) return false;
-      await applyWorkspaceSnapshot(workspace);
+      await applyWorkspaceSnapshot(workspace, { preserveEditor: background });
       return driveState === session && session.connected && session.accessToken === credential;
     });
   } finally {
@@ -4289,7 +4382,7 @@ async function loadDriveWorkspace() {
   }
 }
 
-async function applyWorkspaceSnapshot(workspace) {
+async function applyWorkspaceSnapshot(workspace, { preserveEditor = false } = {}) {
   requireEditorLease();
   if (!await waitForLocalSaves()) throw new Error("Local edits could not be saved. Keep this tab open and retry the save.");
   await NotebookPersistence.mergeSnapshot(db, {
@@ -4310,6 +4403,14 @@ async function applyWorkspaceSnapshot(workspace) {
     localStorage.setItem(TAXONOMY_KEY, JSON.stringify(taxonomy));
   }
 
+  // Capture after the async merge: navigation may have opened an older cached
+  // form while it ran. Never grant that visible form a newly fetched baseline.
+  const editorBaselines = preserveEditor ? [activeExperiment, activeSurgery].filter(Boolean).map((record) => ({
+    id: record.id,
+    record,
+    modifiedTime: driveState.recordModifiedTimes[record.id],
+    revision: driveState.recordRevisions[record.id],
+  })) : [];
   driveState.recordModifiedTimes = Object.fromEntries(
     Object.entries(workspace?.recordMeta || {}).map(([id, meta]) => [
       id,
@@ -4319,6 +4420,15 @@ async function applyWorkspaceSnapshot(workspace) {
   driveState.recordRevisions = Object.fromEntries(
     Object.entries(workspace?.recordMeta || {}).filter(([, meta]) => typeof meta.revision === "string").map(([id, meta]) => [id, meta.revision]),
   );
+  for (const baseline of editorBaselines) {
+    const remote = workspace?.records?.find((record) => record.id === baseline.id);
+    if (!remote || !NotebookPersistence.recordsEqual(remote, baseline.record)) {
+      // Own properties with undefined values prevent fallback to newly fetched
+      // metadata when this editor had no known protected baseline.
+      driveState.recordModifiedTimes[baseline.id] = baseline.modifiedTime ?? "";
+      driveState.recordRevisions[baseline.id] = baseline.revision;
+    }
+  }
 
   await refreshPendingDrafts();
   await loadExperiments();
@@ -4349,7 +4459,8 @@ async function syncDriveNow() {
     if (!await loadDriveWorkspace()) return;
     await flushPendingWrites();
     if (driveState !== session || !session.connected || session.accessToken !== credential) return;
-    driveState.status = `Synced ${new Date().toLocaleTimeString([], {
+    driveState.status = pendingDrafts.length ? (pendingDrafts.some((draft) => draft.needsReview)
+      ? "Review needed — some edits are not on Drive" : "Edits waiting for Drive") : `Synced ${new Date().toLocaleTimeString([], {
       hour: "numeric",
       minute: "2-digit",
     })}`;
@@ -4508,6 +4619,7 @@ function backendConnectionError(error) {
     "Could not reach the notebook service. Check your internet connection, then retry.",
   );
   connectionError.cause = error;
+  connectionError.retryable = true;
   return connectionError;
 }
 
@@ -4533,7 +4645,11 @@ async function backendConnectionRequest(path, options = {}) {
       if (driveState !== session || `Bearer ${session.accessToken}` !== authorization) throw error;
       const transient = timedOut || isBackendNetworkError(error) || [429, 502, 503, 504].includes(error.status);
       if (!transient || index === maxAttempts - 1) {
-        if (timedOut) throw new Error("The notebook service took too long to respond. Retry connection; you do not need to sign in again.");
+        if (timedOut) {
+          const timeoutError = new Error("The notebook service took too long to respond. Retry connection; you do not need to sign in again.");
+          timeoutError.retryable = true;
+          throw timeoutError;
+        }
         if (isBackendNetworkError(error)) throw backendConnectionError(error);
         throw error;
       }
@@ -4579,6 +4695,12 @@ async function backendError(response) {
 
 function handleDriveError(error, { notify = true } = {}) {
   console.error(error);
+  const transient = isBackendNetworkError(error) || error.name === "AbortError" || [408, 429, 500, 502, 503, 504].includes(error.status) || error.retryable === true;
+  automaticSync.blocked = !transient;
+  if (transient) {
+    automaticSync.reconcile = true;
+    automaticSync.failures += 1;
+  }
   if (error.status === 401 || error.status === 403) {
     rememberBackendCredential("");
   }
@@ -4588,6 +4710,7 @@ function handleDriveError(error, { notify = true } = {}) {
   driveState.status = error.status === 401 ? "Sign-in expired" : error.status === 403 ? "Account not allowed" : "Connection interrupted";
   driveState.error = error.message || String(error);
   updateConnectionUi();
+  scheduleAutomaticSync();
   if (notify) window.alert(driveState.error);
 }
 
@@ -4850,7 +4973,10 @@ async function init() {
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden" && canEditNotebook()) flushPendingWrites().catch(reportLocalSaveError);
+    else scheduleAutomaticSync({ immediate: true });
   });
+  window.addEventListener("online", () => scheduleAutomaticSync({ immediate: true }));
+  window.addEventListener("pageshow", () => scheduleAutomaticSync({ immediate: true }));
   await route();
   await tryAutoConnectBackend();
 }

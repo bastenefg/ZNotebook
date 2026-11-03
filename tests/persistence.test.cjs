@@ -547,3 +547,215 @@ test("retiring a recovered draft cannot advance or delete a newer pending revisi
   assert.deepEqual(result.afterExactRetire.experiments, result.before.experiments);
   assert.deepEqual(result.afterExactRetire.workspaceMeta, result.before.workspaceMeta);
 });
+
+test("typing queued behind an acknowledgement inherits only that confirmed save", async () => {
+  const result = await inDatabase(async () => {
+    const first = { ...draft(record("a", "First saved edit")), baseRevision: "remote-r0" };
+    await api.stageDraft(db, first);
+    // Both calls start before either transaction completes. The editor has
+    // captured r0, but its transaction runs after the acknowledgement deletes r1.
+    const acknowledged = api.acknowledgeDraft(db, {
+      key: first.key, revision: first.revision, modifiedTime: "t1", remoteRevision: "remote-r1",
+    });
+    const staged = api.stageDraft(db, {
+      ...draft(record("a", "Typing during acknowledgement"), "r2"), baseRevision: "remote-r0",
+    });
+    await acknowledged;
+    return { staged: await staged, state: await dump() };
+  });
+  assert.equal(result.staged.baseModifiedTime, "t1");
+  assert.equal(result.staged.baseRevision, "remote-r1");
+  assert.equal(result.staged.record.title, "Typing during acknowledgement");
+  assert.equal(result.staged.needsReview, undefined);
+  assert.equal(result.state.pendingWrites.length, 1);
+});
+
+test("a later remote snapshot cannot reuse an earlier acknowledgement to grant its revision", async () => {
+  const result = await inDatabase(async () => {
+    const first = { ...draft(record("a", "My acknowledged edit")), baseRevision: "remote-r0" };
+    await api.stageDraft(db, first);
+    await api.acknowledgeDraft(db, {
+      key: first.key, revision: first.revision, modifiedTime: "t1", remoteRevision: "remote-r1",
+    });
+    await api.mergeSnapshot(db, {
+      backendUrl: backend, records: [record("a", "Another researcher's edit")],
+      recordMeta: { a: { modifiedTime: "t2", revision: "remote-r2" } },
+    });
+    return api.stageDraft(db, {
+      ...draft(record("a", "Typing based on the older record"), "r2"), baseRevision: "remote-r0",
+    });
+  });
+  assert.equal(result.baseModifiedTime, "t0");
+  assert.equal(result.baseRevision, "remote-r0", "only confirmed local acknowledgement lineage can advance a supplied baseline");
+});
+
+test("lost acknowledgement followed by more typing reconciles the exact attempted payload", async () => {
+  const result = await inDatabase(async () => {
+    const first = { ...draft(record("a", "Uploaded before connection dropped")), baseRevision: "remote-r0" };
+    await api.stageDraft(db, first);
+    await api.markDraftAttempt(db, { key: first.key, revision: first.revision });
+    await api.stageDraft(db, {
+      ...draft(record("a", "Newer surgical observation"), "r2"), baseRevision: "remote-r0",
+    });
+    // A stale write may already have received 409 before reconnecting. The
+    // exact prior payload still proves which remote content our newer draft used.
+    await api.updateDraftReview(db, { key: first.key, revision: "r2", reason: "Stale write response" });
+    const merged = await api.mergeSnapshot(db, {
+      backendUrl: backend, records: [first.record],
+      recordMeta: { a: { modifiedTime: "t1", revision: "remote-r1" } },
+    });
+    return { merged, state: await dump() };
+  });
+  const pending = result.merged.drafts[0];
+  assert.equal(pending.record.title, "Newer surgical observation");
+  assert.equal(pending.baseRevision, "remote-r1");
+  assert.equal(pending.baseModifiedTime, "t1");
+  assert.equal(Boolean(pending.needsReview), false);
+  assert.equal(pending.attempt, undefined);
+  assert.equal(result.state.experiments[0].title, "Newer surgical observation");
+});
+
+test("an attempted upload never rebases newer edits over different remote research", async () => {
+  const result = await inDatabase(async () => {
+    const first = { ...draft(record("a", "My attempted upload")), baseRevision: "remote-r0" };
+    await api.stageDraft(db, first);
+    await api.markDraftAttempt(db, { key: first.key, revision: first.revision });
+    await api.stageDraft(db, {
+      ...draft(record("a", "My newer local notes"), "r2"), baseRevision: "remote-r0",
+    });
+    return api.mergeSnapshot(db, {
+      backendUrl: backend, records: [record("a", "Another researcher's observations")],
+      recordMeta: { a: { modifiedTime: "t1", revision: "remote-r1" } },
+    });
+  });
+  assert.equal(result.drafts[0].needsReview, true);
+  assert.equal(result.drafts[0].baseRevision, "remote-r0");
+  assert.equal(result.drafts[0].baseModifiedTime, "t0");
+  assert.equal(result.records[0].title, "My newer local notes");
+});
+
+test("stale upload selection cannot replace the latest durable attempt or upload a reviewed draft", async () => {
+  const result = await inDatabase(async () => {
+    const first = { ...draft(record("a", "First attempted upload")), baseRevision: "remote-r0" };
+    await api.stageDraft(db, first);
+    await api.markDraftAttempt(db, { key: first.key, revision: first.revision });
+    await api.stageDraft(db, {
+      ...draft(record("a", "Latest local edit"), "r2"), baseRevision: "remote-r0",
+    });
+    const before = await dump();
+    const stale = await api.markDraftAttempt(db, { key: first.key, revision: first.revision });
+    const after = await dump();
+    await api.updateDraftReview(db, { key: first.key, revision: "r2", reason: "Real conflict" });
+    const reviewed = await api.markDraftAttempt(db, { key: first.key, revision: "r2" });
+    return { before, stale, after, reviewed };
+  });
+  assert.equal(result.stale, null);
+  assert.deepEqual(result.after, result.before);
+  assert.equal(result.reviewed, null);
+});
+
+test("typing queued behind exact-content reconciliation inherits its confirmed baseline", async () => {
+  const result = await inDatabase(async () => {
+    const first = { ...draft(record("a", "Upload whose response was lost")), baseRevision: "remote-r0" };
+    await api.stageDraft(db, first);
+    const reconciled = api.mergeSnapshot(db, {
+      backendUrl: backend, records: [first.record],
+      recordMeta: { a: { modifiedTime: "t1", revision: "remote-r1" } },
+    });
+    const staged = api.stageDraft(db, {
+      ...draft(record("a", "Typing during reconciliation"), "r2"), baseRevision: "remote-r0",
+    });
+    await reconciled;
+    return staged;
+  });
+  assert.equal(result.baseRevision, "remote-r1");
+  assert.equal(result.baseModifiedTime, "t1");
+  assert.equal(result.record.title, "Typing during reconciliation");
+});
+
+test("an exactly confirmed legacy revision upgrades a pending draft without a recovered copy", async () => {
+  const result = await inDatabase(async () => {
+    const pending = { ...draft(record("a", "Local surgical notes")), baseRevision: "d2.exact-current",
+      needsReview: true, reason: "Earlier protected-token mismatch" };
+    await api.stageDraft(db, pending);
+    return api.mergeSnapshot(db, {
+      backendUrl: backend, records: [record("a", "Original remote notes")],
+      recordMeta: { a: { modifiedTime: "t0", revision: "d3.current-content", legacyRevision: "d2.exact-current" } },
+    });
+  });
+  assert.equal(result.drafts[0].baseRevision, "d3.current-content");
+  assert.equal(result.drafts[0].baseModifiedTime, "t0");
+  assert.equal(Boolean(result.drafts[0].needsReview), false);
+  assert.equal(result.drafts[0].reason, undefined);
+  assert.equal(result.drafts[0].record.title, "Local surgical notes");
+});
+
+test("legacy metadata-version drift cannot grant an unproven current content baseline", async () => {
+  const result = await inDatabase(async () => {
+    const pending = { ...draft(record("a", "Preserved local observations")), baseRevision: "d2.version-9",
+      needsReview: true, reason: "Unconfirmed legacy baseline" };
+    await api.stageDraft(db, pending);
+    return api.mergeSnapshot(db, {
+      backendUrl: backend, records: [record("a", "Existing remote notes")],
+      recordMeta: { a: { modifiedTime: "t0", revision: "d3.current-content", legacyRevision: "d2.version-10" } },
+    });
+  });
+  assert.equal(result.drafts[0].baseRevision, "d2.version-9");
+  assert.equal(result.drafts[0].baseModifiedTime, "t0");
+  assert.equal(result.drafts[0].needsReview, true);
+  assert.equal(result.records[0].title, "Preserved local observations");
+});
+
+test("an external content change preserving modifiedTime cannot migrate an older legacy token", async () => {
+  const result = await inDatabase(async () => {
+    await api.stageDraft(db, { ...draft(record("a", "My local surgery notes")), baseRevision: "d2.old-content" });
+    return api.mergeSnapshot(db, {
+      backendUrl: backend, records: [record("a", "Another researcher's changed observations")],
+      recordMeta: { a: { modifiedTime: "t0", revision: "d3.external-content", legacyRevision: "d2.external-content" } },
+    });
+  });
+  assert.equal(result.drafts[0].needsReview, true);
+  assert.equal(result.drafts[0].baseRevision, "d2.old-content");
+  assert.equal(result.records[0].title, "My local surgery notes");
+});
+
+test("legacy migration preserves attempted-upload evidence for later lost-response reconciliation", async () => {
+  const result = await inDatabase(async () => {
+    const submitted = { ...draft(record("a", "Earlier attempted upload")), baseRevision: "d2.exact-current" };
+    await api.stageDraft(db, submitted);
+    await api.markDraftAttempt(db, { key: submitted.key, revision: submitted.revision });
+    await api.stageDraft(db, {
+      ...draft(record("a", "More recent local observations"), "r2"), baseRevision: "d2.exact-current",
+    });
+    const migrated = await api.mergeSnapshot(db, {
+      backendUrl: backend, records: [record("a", "Original remote notes")],
+      recordMeta: { a: { modifiedTime: "t0", revision: "d3.current-content", legacyRevision: "d2.exact-current" } },
+    });
+    const reconciled = await api.mergeSnapshot(db, {
+      backendUrl: backend, records: [submitted.record],
+      recordMeta: { a: { modifiedTime: "t1", revision: "d3.attempted-content", legacyRevision: "d2.later-version" } },
+    });
+    return { migrated, reconciled };
+  });
+  assert.equal(result.migrated.drafts[0].attempt.baseRevision, "d3.current-content");
+  assert.equal(result.migrated.drafts[0].attempt.baseModifiedTime, "t0");
+  assert.equal(result.migrated.drafts[0].attempt.record.title, "Earlier attempted upload");
+  assert.equal(result.reconciled.drafts[0].baseRevision, "d3.attempted-content");
+  assert.equal(result.reconciled.drafts[0].baseModifiedTime, "t1");
+  assert.equal(result.reconciled.drafts[0].attempt, undefined);
+  assert.equal(Boolean(result.reconciled.drafts[0].needsReview), false);
+  assert.equal(result.reconciled.records[0].title, "More recent local observations");
+});
+
+test("legacy token migration also requires the exact paired timestamp", async () => {
+  const result = await inDatabase(async () => {
+    await api.stageDraft(db, { ...draft(record("a", "Preserved local notes")), baseRevision: "d2.exact-current" });
+    return api.mergeSnapshot(db, {
+      backendUrl: backend, records: [record("a", "Remote notes")],
+      recordMeta: { a: { modifiedTime: "t1", revision: "d3.current-content", legacyRevision: "d2.exact-current" } },
+    });
+  });
+  assert.equal(result.drafts[0].baseRevision, "d2.exact-current");
+  assert.equal(result.drafts[0].baseModifiedTime, "t0");
+  assert.equal(result.drafts[0].needsReview, true);
+});

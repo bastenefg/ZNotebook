@@ -107,12 +107,11 @@
           captured.baseModifiedTime = previous.baseModifiedTime;
           if (previous.baseRevision === undefined) delete captured.baseRevision;
           else captured.baseRevision = previous.baseRevision;
+          if (previous.attempt) captured.attempt = previous.attempt;
           if (previous.needsReview) {
             captured.needsReview = true;
             captured.reason = previous.reason || captured.reason || "This draft needs review before it can be saved.";
           }
-          save();
-        } else if (captured.baseModifiedTime !== undefined && captured.baseRevision !== undefined) {
           save();
         } else {
           const hadKnownTime = captured.baseModifiedTime !== undefined;
@@ -120,6 +119,16 @@
           const metaRequest = tx.objectStore(META).get(captured.backendUrl);
           metaRequest.onsuccess = guard(() => {
             const metadata = metaRequest.result?.recordMeta?.[captured.recordId];
+            // An acknowledgement can commit between a keystroke capturing its
+            // baseline and this transaction. Follow only our own confirmed save
+            // from that exact baseline, never an arbitrary newer snapshot.
+            if (typeof captured.baseRevision === "string" &&
+                metadata?.acknowledgedBaseRevision === captured.baseRevision &&
+                metadata?.acknowledgedBaseModifiedTime === captured.baseModifiedTime &&
+                typeof metadata.revision === "string") {
+              captured.baseRevision = metadata.revision;
+              captured.baseModifiedTime = metadata.modifiedTime || "";
+            }
             if (!hadKnownTime) captured.baseModifiedTime = metadata?.modifiedTime || "";
             // Adopt only a complete persisted baseline when neither part was
             // supplied. Equal timestamps do not prove equal Drive revisions.
@@ -154,6 +163,26 @@
     });
   }
 
+  async function markDraftAttempt(db, { key, revision }) {
+    requireString(key, "key");
+    requireString(revision, "revision");
+    return transaction(db, [DRAFTS], "readwrite", (tx, done, guard) => {
+      const store = tx.objectStore(DRAFTS);
+      const request = store.get(key);
+      request.onsuccess = guard(() => {
+        const draft = request.result;
+        if (!draft || draft.revision !== revision || draft.needsReview) { done(null); return; }
+        validateDraft(draft);
+        // Commit this before the network request so a closed/suspended phone
+        // can recognize its own earlier upload even after further local edits.
+        draft.attempt = { record: copyJson(draft.record), revision,
+          baseRevision: draft.baseRevision, baseModifiedTime: draft.baseModifiedTime };
+        store.put(draft);
+        done(draft);
+      });
+    });
+  }
+
   async function acknowledgeDraft(db, { key, revision, modifiedTime, remoteRevision }) {
     requireString(key, "key");
     requireString(revision, "revision");
@@ -165,6 +194,8 @@
       request.onsuccess = guard(() => {
         const draft = request.result;
         if (draft) validateDraft(draft);
+        const acknowledgedBaseRevision = draft?.baseRevision;
+        const acknowledgedBaseModifiedTime = draft?.baseModifiedTime;
         if (!draft) {
           done(null);
         } else if (draft.revision === revision) {
@@ -175,6 +206,7 @@
           // revision becomes the baseline for the newer edits still on device.
           if (modifiedTime) draft.baseModifiedTime = modifiedTime;
           if (remoteRevision !== undefined) draft.baseRevision = remoteRevision;
+          delete draft.attempt;
           store.put(draft);
           done(draft);
         }
@@ -190,6 +222,13 @@
             const updatedMeta = { ...(recordMeta[recordId] || {}) };
             if (modifiedTime) updatedMeta.modifiedTime = modifiedTime;
             if (remoteRevision !== undefined) updatedMeta.revision = remoteRevision;
+            if (typeof acknowledgedBaseRevision === "string" && remoteRevision !== undefined) {
+              updatedMeta.acknowledgedBaseRevision = acknowledgedBaseRevision;
+              updatedMeta.acknowledgedBaseModifiedTime = acknowledgedBaseModifiedTime;
+            } else {
+              delete updatedMeta.acknowledgedBaseRevision;
+              delete updatedMeta.acknowledgedBaseModifiedTime;
+            }
             // Define an own property even for IDs such as '__proto__'.
             Object.defineProperty(recordMeta, recordId, {
               value: updatedMeta,
@@ -271,6 +310,7 @@
       }
       if (meta.modifiedTime !== undefined) requireString(meta.modifiedTime, "modifiedTime", true);
       if (meta.revision !== undefined) requireString(meta.revision, "revision");
+      if (meta.legacyRevision !== undefined) requireString(meta.legacyRevision, "legacyRevision");
     });
 
     return transaction(db, [RECORDS, DRAFTS, META], "readwrite", (tx, done, guard) => {
@@ -285,6 +325,13 @@
           if (saved && recordsEqual(saved, draft.record)) {
             // Covers a successful server save whose response was lost. We read
             // and delete within the same transaction, so a newer draft is safe.
+            const metadata = capturedMeta[draft.recordId];
+            if (metadata?.revision && typeof draft.baseRevision === "string") {
+              // A keystroke queued behind this transaction may still carry the
+              // pre-reconnect baseline, just as at a normal acknowledgement.
+              metadata.acknowledgedBaseRevision = draft.baseRevision;
+              metadata.acknowledgedBaseModifiedTime = draft.baseModifiedTime;
+            }
             draftStore.delete(draft.key);
             return;
           }
@@ -292,6 +339,32 @@
           const savedRevision = capturedMeta[draft.recordId]?.revision;
           let reason = "";
           let changed = false;
+          if (saved && savedRevision && savedTime && draft.baseModifiedTime === savedTime &&
+              typeof draft.baseRevision === "string" && draft.baseRevision.startsWith("d2.") &&
+              draft.baseRevision === capturedMeta[draft.recordId]?.legacyRevision) {
+            // Upgrade only an exact legacy baseline confirmed by the backend.
+            // A version-drifted legacy draft cannot prove its original content.
+            const previousRevision = draft.baseRevision;
+            draft.baseRevision = savedRevision;
+            if (draft.attempt?.baseRevision === previousRevision) draft.attempt.baseRevision = savedRevision;
+            delete draft.needsReview;
+            delete draft.reason;
+            changed = true;
+          }
+          if (saved && savedRevision && savedTime && draft.attempt &&
+              draft.attempt.baseRevision === draft.baseRevision &&
+              draft.attempt.baseModifiedTime === draft.baseModifiedTime &&
+              recordsEqual(saved, draft.attempt.record)) {
+            // The exact bytes submitted by this draft reached Drive, but its
+            // acknowledgement was lost. Retain later typing and retry with the
+            // observed revision under the normal server precondition.
+            draft.baseRevision = savedRevision;
+            draft.baseModifiedTime = savedTime;
+            delete draft.attempt;
+            delete draft.needsReview;
+            delete draft.reason;
+            changed = true;
+          }
           if (saved && (!draft.baseModifiedTime || draft.baseRevision === "")) {
             reason = "A record with this ID already exists on Drive. Review this local draft before saving.";
           } else if ((draft.baseModifiedTime || draft.baseRevision) && (!saved || draft.baseModifiedTime !== savedTime)) {
@@ -328,5 +401,5 @@
     });
   }
 
-  return { stageDraft, getDrafts, acknowledgeDraft, retireDraft, updateDraftReview, getWorkspaceMeta, mergeSnapshot, recordsEqual };
+  return { stageDraft, getDrafts, markDraftAttempt, acknowledgeDraft, retireDraft, updateDraftReview, getWorkspaceMeta, mergeSnapshot, recordsEqual };
 });

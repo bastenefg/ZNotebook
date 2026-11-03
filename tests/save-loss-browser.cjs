@@ -515,6 +515,130 @@ async function waitDraft(page, text) {
       await env.finish();
       console.log("PASS stale workspace reads cannot erase a newer save acknowledged in the background");
     }
+    {
+      const env = await session(browser, { onPut: async ({ route, payload, state, accept }) => {
+        if (payload.baseRevision !== state.remote.recordMeta[payload.record.id].revision) {
+          await route.fulfill({ status: 409, json: { error: "Synthetic stale acknowledgement baseline" } });
+          return;
+        }
+        await route.fulfill({ json: accept(payload) });
+      } });
+      await env.page.evaluate((record) => {
+        const acknowledge = NotebookPersistence.acknowledgeDraft;
+        let injectTyping = true;
+        NotebookPersistence.acknowledgeDraft = async (...args) => {
+          const result = await acknowledge(...args);
+          if (injectTyping) {
+            injectTyping = false;
+            // Deliberately hold the caller between its committed IndexedDB
+            // acknowledgement and the in-memory revision update.
+            await stageRecordSave({ ...record, content: "<p>Typing at the save acknowledgement boundary.</p>" });
+          }
+          return result;
+        };
+      }, original);
+      await env.page.evaluate((record) => saveExperimentRecord({
+        ...record, content: "<p>The first edit was successfully saved.</p>",
+      }), original);
+      await waitSaved(env.page);
+      assert.equal(env.state.puts.length, 2);
+      assert.notEqual(env.state.puts[0].baseRevision, env.state.puts[1].baseRevision,
+        "the second save uses the confirmed first save as its baseline");
+      assert.equal(env.state.remote.records.find((record) => record.id === original.id).content,
+        "<p>Typing at the save acknowledgement boundary.</p>");
+      assert.deepEqual(await drafts(env.page), [], "normal continued typing must not require a recovered copy");
+      await env.finish();
+      console.log("PASS typing at the acknowledgement boundary uploads the latest edit without a false conflict or recovered copy");
+    }
+    for (const backgroundRead of ["connect", "workspace"]) {
+      const workspace = clone(fixture);
+      workspace.records.push(clone(surgery));
+      workspace.recordMeta[surgery.id] = { modifiedTime: "surgery-v1", revision: "surgery-revision-1" };
+      const env = await session(browser, { workspace, onPut: async ({ route, payload, state, accept }) => {
+        if (payload.baseRevision !== state.remote.recordMeta[payload.record.id].revision) {
+          await route.fulfill({ status: 409, json: { error: "Another researcher updated this surgery" } });
+          return;
+        }
+        await route.fulfill({ json: accept(payload) });
+      } });
+      await env.page.evaluate(() => { location.hash = "#/surgery/synthetic-surgery"; });
+      await env.page.locator("[data-surgery-details-form]").waitFor();
+      const notes = env.page.locator("#detailSurgeryNotes");
+      await notes.fill("Unsaved notes entered on the phone during surgery.");
+      await notes.focus();
+      const remoteIndex = env.state.remote.records.findIndex((record) => record.id === surgery.id);
+      env.state.remote.records[remoteIndex].terminationNotes = "Another researcher added a collection observation.";
+      env.state.remote.recordMeta[surgery.id] = { modifiedTime: "surgery-v2", revision: "surgery-revision-2" };
+      const changedRemote = clone(env.state.remote.records[remoteIndex]);
+      await env.page.evaluate((backgroundRead) => backgroundRead === "connect"
+        ? connectDrive(savedBackendCredential(), { background: true })
+        : loadDriveWorkspace({ background: true }), backgroundRead);
+      assert.equal(await notes.inputValue(), "Unsaved notes entered on the phone during surgery.",
+        "background recovery must not rerender or discard unsubmitted surgery form input");
+      assert.equal(await notes.evaluate((element) => element === document.activeElement), true,
+        "background recovery restores the user's current input focus");
+      await env.page.getByRole("button", { name: "Save changes", exact: true }).click();
+      await waitForAsync(env.page, async () => (await NotebookPersistence.getDrafts(db, driveSettings.backendUrl))
+        .some((draft) => draft.recordId === "synthetic-surgery" && draft.needsReview));
+      const pending = (await drafts(env.page)).find((draft) => draft.recordId === surgery.id);
+      assert.equal(env.state.puts[0].baseRevision, "surgery-revision-1",
+        "the old active form cannot adopt the background snapshot's newer conflicting baseline");
+      assert.equal(pending.record.surgeryNotes, "Unsaved notes entered on the phone during surgery.");
+      assert.deepEqual(pending.record.surgeryPhotos, surgery.surgeryPhotos);
+      assert.deepEqual(pending.record.terminationPhotos, surgery.terminationPhotos);
+      assert.deepEqual(env.state.remote.records[remoteIndex], changedRemote,
+        "the newly observed remote research remains intact when the old form is submitted");
+      await env.finish();
+      console.log(`PASS background ${backgroundRead} preserves unsubmitted surgery input and cannot grant it a conflicting remote revision`);
+    }
+    {
+      const workspace = clone(fixture);
+      workspace.records.push(clone(surgery));
+      workspace.recordMeta[surgery.id] = { modifiedTime: "navigation-v1", revision: "navigation-revision-1" };
+      const env = await session(browser, { workspace, onPut: async ({ route }) => {
+        await route.fulfill({ status: 409, json: { error: "Remote surgery changed during navigation" } });
+      } });
+      await openRecord(env.page);
+      await env.page.evaluate(() => {
+        const read = getExperiment;
+        const gate = new Promise((resolve) => { window.__releaseNavigation = resolve; });
+        getExperiment = async (id) => {
+          const record = await read(id);
+          if (id === "synthetic-surgery") {
+            window.__navigationRead = true;
+            await gate;
+          }
+          return record;
+        };
+        window.__navigation = renderSurgeryDetailPage("synthetic-surgery");
+        const merge = NotebookPersistence.mergeSnapshot;
+        NotebookPersistence.mergeSnapshot = async (...args) => {
+          const result = await merge(...args);
+          // Navigation already read the old record, but finishes rendering
+          // while the asynchronous snapshot application is still in progress.
+          window.__releaseNavigation();
+          await window.__navigation;
+          return result;
+        };
+      });
+      await env.page.waitForFunction(() => window.__navigationRead);
+      const remote = env.state.remote.records.find((record) => record.id === surgery.id);
+      remote.surgeryNotes = "Another researcher's newly saved surgical observations.";
+      env.state.remote.recordMeta[surgery.id] = { modifiedTime: "navigation-v2", revision: "navigation-revision-2" };
+      const remoteBefore = clone(remote);
+      await env.page.evaluate(() => loadDriveWorkspace({ background: true }));
+      assert.equal(await env.page.locator("#detailSurgeryNotes").inputValue(), surgery.surgeryNotes);
+      assert.equal(await env.page.evaluate(() => driveState.recordRevisions["synthetic-surgery"]), "navigation-revision-1",
+        "navigation that rendered an old cached record retains that record's baseline");
+      await env.page.locator("#detailSurgeryNotes").fill("Local notes following navigation.");
+      await env.page.getByRole("button", { name: "Save changes", exact: true }).click();
+      await waitForAsync(env.page, async () => (await NotebookPersistence.getDrafts(db, driveSettings.backendUrl))
+        .some((draft) => draft.recordId === "synthetic-surgery" && draft.needsReview));
+      assert.equal(env.state.puts[0].baseRevision, "navigation-revision-1");
+      assert.deepEqual(remote, remoteBefore);
+      await env.finish();
+      console.log("PASS navigation completing during a background snapshot cannot attach a fresh token to stale form content");
+    }
     console.log("All save-loss browser tests passed; no live backend or Drive was accessed.");
     console.log(`Screenshots: ${screenshotDir}`);
   } finally {

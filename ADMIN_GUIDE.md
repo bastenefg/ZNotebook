@@ -200,6 +200,8 @@ The frontend refuses record uploads when `/workspace` does not advertise protoco
 
 Do not roll back to the old unconditional-write backend while editors are active. Pause writes and drain requests before any rollback; preserve the registry, pending browser drafts and all existing Drive files. Validation should use isolated test records, never overwrite a real experiment as a smoke test.
 
+The November 3 sync correction upgrades the already protected backend from commit `4e074ed`; both versions enforce conditional writes, so that follow-up does not require the original unconditional-writer pause. Deploy the backend first with all existing settings and registry preserved, verify `/health` reports `recordRevisionFormat:3`, then publish the frontend. Have users reload without clearing browser data. No records are migrated. Numeric Drive versions can advance without a content change, so the corrected baseline uses the file ID, ETag and immutable content revision. Old pending drafts migrate only when their full legacy baseline is still confirmed; otherwise they remain preserved for review.
+
 ## Recovery and Deletion Policy
 
 The app uses soft deletion. When a user deletes a record, the record JSON remains in Drive and gets a `deletedAt` timestamp. Users can restore it from `Show deleted records`.

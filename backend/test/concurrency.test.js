@@ -32,6 +32,10 @@ async function revision(server, fileId = "physical-a") {
 }
 
 function token(metadata) {
+  return `d3.${Buffer.from(JSON.stringify([metadata.id, metadata.etag, metadata.headRevisionId])).toString("base64url")}`;
+}
+
+function legacyToken(metadata) {
   return `d2.${Buffer.from(JSON.stringify([metadata.id, metadata.etag, String(metadata.version)])).toString("base64url")}`;
 }
 
@@ -87,6 +91,68 @@ test("missing, stale, malformed, wrong-file baselines and force cannot overwrite
     await assert.rejects(server.upsertRecord("records", { ...original, content: "Must not overwrite" }, base), isConflict);
   }
   await assert.rejects(server.upsertRecord("records", original, token(await revision(server)), true), isConflict);
+  assert.deepEqual(drive.snapshot(), before);
+  assert.equal(mutationRequests(drive).length, 0);
+});
+
+test("a metadata-only Drive version advance does not invalidate the returned content baseline", async () => {
+  const drive = fixture();
+  const before = drive.snapshot();
+  const { server } = instance(drive, "sequential-writer");
+  const first = await server.upsertRecord("records", { ...original, content: "First phone edit" }, token(await revision(server)));
+  const file = drive.files.get("physical-a");
+  const contentMetadata = clone(file.metadata);
+  // Real Drive has been observed incrementing version later while these
+  // content identity fields remain exactly the upload response's values.
+  file.metadata.version = String(Number(file.metadata.version) + 1);
+  assert.equal(file.metadata.etag, contentMetadata.etag);
+  assert.equal(file.metadata.headRevisionId, contentMetadata.headRevisionId);
+  assert.equal(file.metadata.modifiedDate, contentMetadata.modifiedDate);
+  const secondRecord = { ...original, content: "Second phone edit after metadata bookkeeping" };
+  const second = await server.upsertRecord("records", secondRecord, first.revision);
+  assert.deepEqual(file.data, secondRecord);
+  assert.notEqual(second.revision, first.revision);
+  assert.equal(drive.commits.filter(event => event.fileId === "physical-a").length, 2);
+  assertUnrelatedPreserved(drive, before);
+});
+
+test("workspace exposes stable content tokens and an exact legacy migration baseline", async () => {
+  const drive = fixture();
+  const { server } = instance(drive, "metadata-reader");
+  const first = clone(await server.readWorkspace(workspace));
+  const file = drive.files.get("physical-a");
+  file.metadata.version = String(Number(file.metadata.version) + 1);
+  const second = clone(await server.readWorkspace(workspace));
+  assert.equal(second.recordMeta[original.id].revision, first.recordMeta[original.id].revision);
+  assert.notEqual(second.recordMeta[original.id].legacyRevision, first.recordMeta[original.id].legacyRevision);
+  assert.equal(second.recordMeta[original.id].legacyRevision, legacyToken(file.metadata));
+  assert.deepEqual(second.records, first.records);
+  assert.equal(mutationRequests(drive).length, 0);
+});
+
+test("legacy baselines migrate only while their entire original revision still matches", async () => {
+  const drive = fixture();
+  const { server } = instance(drive, "legacy-writer");
+  const baseline = legacyToken(await revision(server));
+  const saved = await server.upsertRecord("records", { ...original, content: "Exact legacy baseline edit" }, baseline);
+  assert.ok(saved.revision.startsWith("d3."));
+  assert.equal(saved.legacyRevision, legacyToken(drive.files.get("physical-a").metadata));
+  const exactCurrentLegacy = saved.legacyRevision;
+  drive.files.get("physical-a").metadata.version = String(Number(drive.files.get("physical-a").metadata.version) + 1);
+  const before = drive.snapshot();
+  await assert.rejects(server.upsertRecord("records", { ...original, content: "Unproven legacy retry" }, exactCurrentLegacy), isConflict);
+  assert.deepEqual(drive.snapshot(), before);
+});
+
+test("real content changes still invalidate d3 baselines when modifiedDate is preserved", async () => {
+  const drive = fixture();
+  const { server } = instance(drive, "stale-writer");
+  const initial = await revision(server);
+  drive.externalUpdate("physical-a", { ...original, content: "Another editor's saved observations" });
+  drive.files.get("physical-a").metadata.modifiedDate = initial.modifiedDate;
+  drive.files.get("physical-a").metadata.etag = initial.etag;
+  const before = drive.snapshot();
+  await assert.rejects(server.upsertRecord("records", { ...original, content: "Must not overwrite" }, token(initial)), isConflict);
   assert.deepEqual(drive.snapshot(), before);
   assert.equal(mutationRequests(drive).length, 0);
 });
@@ -305,7 +371,7 @@ test("GET /workspace reads existing files and never creates, patches or updates 
   const { routes } = instance(drive, "read-only-route");
   const snapshot = clone(await new Promise((resolve, reject) => routes.get("GET /workspace")({}, { json: resolve }, reject)));
   assert.deepEqual(snapshot.records, [original, archived]);
-  assert.ok(snapshot.recordMeta[original.id].revision.startsWith("d2."));
+  assert.ok(snapshot.recordMeta[original.id].revision.startsWith("d3."));
   assert.equal(mutationRequests(drive).length, 0);
   assert.deepEqual(drive.snapshot(), before);
 });

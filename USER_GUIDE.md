@@ -80,7 +80,7 @@ Common things to add:
 
 The editor saves automatically. `Saving on this device…` means the local save is still in progress. `Saved on this device — waiting for Drive` or `offline` means the record is stored in this browser but has not been confirmed by Drive. `Saved to Drive` means the backend confirmed the record save. Submitted surgery changes use the same protection.
 
-Pending drafts survive navigation and browser reloads. Reconnect or use `Sync` to retry them. Keep the device and browser data until Drive confirms the save. If local storage fails, keep the tab open and use `Retry saving` or `Download recovery file`; navigation is paused to protect the edits still in memory.
+Pending drafts survive navigation and browser reloads. While the notebook is open and your sign-in remains valid, interrupted uploads retry automatically, including when your connection returns or you return to the tab. You can also use `Sync now`. Keep the notebook open until Drive confirms the save before relying on another device; a phone can suspend browser activity when locked or in the background. Keep the device and browser data until Drive confirms the save. If local storage fails, keep the tab open and use `Retry saving` or `Download recovery file`; navigation is paused to protect the edits still in memory.
 
 If `Review drafts` appears, the Drive version changed or the app recovered an older browser copy with no trustworthy Drive revision. Your local draft is preserved. You can download it or save it as a separate recovered record, then compare it with the original. This does not overwrite the original Drive record. Recovery JSON includes existing media references; it is not a full attachment backup.
 
