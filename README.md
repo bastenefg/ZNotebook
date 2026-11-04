@@ -1,6 +1,6 @@
 # INFUS Notebook
 
-A lightweight shared lab notebook for project records, animal surgery cards, and collected-sample tracking. Notebook sections have configurable tables and rich detail pages; the separate Surgeries workflow is optimized for mobile photo capture.
+A lightweight shared lab notebook for project records, animal surgery cards, collected-sample tracking, and IHC/IF antibody references. Notebook sections have configurable tables and rich detail pages; the separate Surgeries workflow is optimized for mobile photo capture. IHC/IF keeps searchable antibody product details and application-specific staining conditions ready for quick lookup.
 
 ## Run locally
 
@@ -19,6 +19,8 @@ Open `index.html` in a browser. The app stores records in browser IndexedDB, inc
 - `content`: rich HTML note body
 
 Surgery records use `recordType: "surgery"` and store the surgery name, surgery date, optional desired endpoint in days, surgical notes, card photos, termination date, termination notes, and collection photos. Both surgery views can be sorted by performed or termination date. Active procedures show a calculated planned termination date and trigger a dismissible global reminder when due within two days or overdue; collected samples show the actual surgery-to-collection duration calculated from their calendar dates.
+
+Antibody records use `recordType: "antibody"` and `sectionId: "__antibodies__"`. They store the target/name, manufacturer, catalog number, host, reactive species, clone, lot, storage location, product URL, and notes. Their `protocols` array holds separate IHC or IF conditions: tissue/preparation, working dilution or concentration (including units), antigen retrieval, incubation, validation status, and notes. They share the existing record persistence, Drive revision protection, soft deletion, backup, and recovery flows without a database or backend migration. Product links accept only HTTP(S); stored conditions are user-entered and never inferred from a product code.
 
 Built-in field names can be renamed through `Edit labels`. New sections can be created with `Add section`, and each section can choose its starting columns. Section titles can be renamed from their header controls. Columns can be added from the section header and removed from the table header hover control.
 
@@ -92,5 +94,7 @@ With the same Playwright setup, run `node --test tests/persistence.test.cjs` and
 Also run `node tests/tab-concurrency-browser.cjs` and `node tests/concurrent-edit-browser.cjs`. The latter connects two isolated browser profiles to two independent backend instances sharing a fake Drive storage boundary; it verifies the conflict and recovery flow end to end. Backend race tests gate both uploads at their final commit, so a process-local mutex cannot make them pass accidentally.
 
 Run `node tests/automatic-sync-browser.cjs` for interrupted-upload retries, phone resume/online events, preserved editing focus, and automatic-sync eligibility checks. The persistence tests also cover lost acknowledgements with further typing and edits at the acknowledgement boundary.
+
+Run `node tests/antibodies-browser.cjs` with the same Playwright setup for IHC/IF creation, editing, product-code search, protocol filters, copy, reload, backup normalization, soft delete/restore, read-only browsing, interrupted uploads, and desktop/mobile layout. It uses synthetic records and intercepts all network requests.
 
 The opt-in `backend/tools/probe-drive-conditional-write.js --allow-create-isolated-test-data` is different: it uses the supplied owner OAuth environment credentials to create a new synthetic folder/file outside the research folder, tests real conditional writes and generated-ID retries, and retains the synthetic artifacts. It accepts no existing destination/file IDs and performs no deletes. Never run it as part of ordinary unit tests or point it at research files.

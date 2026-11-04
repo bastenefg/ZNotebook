@@ -55,6 +55,16 @@ When the animal is euthanized and tissue is collected, open the active surgery a
 
 In the hosted app, Drive must be connected before surgery records can be added or edited. This prevents important card photos from remaining only in temporary browser storage.
 
+## IHC/IF Antibody Library
+
+Open `IHC/IF` beside Notebook and Surgeries, then choose `Add antibody`. Enter the target/name, product code, manufacturer, host species, and reactive species. Optional details include a direct product/datasheet link, clone, lot, storage location, and notes.
+
+Save a separate staining protocol for each application or tissue preparation. Each protocol records IHC or IF, the working dilution or concentration with its units, tissue/preparation, antigen retrieval, incubation, and notes. Use `Not yet validated`, `Optimizing`, or `Lab validated` to distinguish reference conditions from ones tested in your lab. The app does not look up or guess concentrations.
+
+Search by product code, target, host, species, or notes. Dilution/concentration and retrieval appear directly in the results. Application and `Lab validated only` filters show only protocols matching both selections. `Copy protocol` copies the saved conditions and product details for pasting into an experiment; if clipboard access is unavailable, a selectable text panel opens.
+
+Open an antibody and choose `Edit antibody` to update it or add another protocol. Choose `Save antibody` to commit the form. In the hosted app, connect Drive before starting an edit; submitted changes use the same local-save and Drive-sync protections as notebook records. Antibodies are included in JSON backups. Deleted antibodies can be recovered with `Show deleted` and `Restore antibody`.
+
 ## Create a Record
 
 1. Find the section where the record belongs.

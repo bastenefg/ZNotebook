@@ -13,6 +13,7 @@ const EDITOR_IMAGE_MIN_WIDTH = 120;
 const EDITOR_IMAGE_MAX_STORED_WIDTH = 4096;
 const DEFAULT_SECTION_ID = "experiments";
 const SURGERY_SECTION_ID = "__surgeries__";
+const ANTIBODY_SECTION_ID = "__antibodies__";
 const DEFAULT_RECORD_STATUS = "in-progress";
 const DEFAULT_RECORD_OUTCOME = "pending";
 const DEFAULT_RECORD_CONTENT = "<h2>Details</h2><ul><li></li></ul>";
@@ -116,6 +117,9 @@ let db;
 let experiments = [];
 let activeExperiment = null;
 let activeSurgery = null;
+let activeAntibody = null;
+let antibodyEditor = null;
+let antibodyFilters = { search: "", application: "", validated: false, showDeleted: false };
 let saveTimer = null;
 let editorImageResizeCleanup = null;
 const recordSaveQueues = new Map();
@@ -936,6 +940,42 @@ function isSurgeryRecord(record) {
   return Boolean(record && record.recordType === "surgery");
 }
 
+function isAntibodyRecord(record) {
+  return Boolean(record && record.recordType === "antibody");
+}
+
+function normalizeAntibodyProtocol(protocol = {}) {
+  const normalized = {
+    id: String(protocol.id || uid()),
+    application: ["IHC", "IF"].includes(protocol.application) ? protocol.application : "IHC",
+    validation: ["unverified", "testing", "validated"].includes(protocol.validation) ? protocol.validation : "unverified",
+  };
+  for (const key of ["context", "concentration", "retrieval", "incubation", "notes"]) {
+    normalized[key] = String(protocol[key] || "");
+  }
+  return normalized;
+}
+
+function normalizeAntibodyRecord(record) {
+  const timestamp = now();
+  const normalized = {
+    id: String(record.id || uid()),
+    recordType: "antibody",
+    sectionId: ANTIBODY_SECTION_ID,
+    title: String(record.title || "Untitled antibody"),
+    protocols: (Array.isArray(record.protocols) ? record.protocols : [])
+      .filter((protocol) => protocol && typeof protocol === "object")
+      .map(normalizeAntibodyProtocol),
+    createdAt: String(record.createdAt || timestamp),
+    updatedAt: String(record.updatedAt || timestamp),
+  };
+  for (const key of ["catalogNumber", "manufacturer", "host", "reactiveSpecies", "clone", "lot", "storage", "productUrl", "notes"]) {
+    normalized[key] = String(record[key] || "");
+  }
+  if (record.deletedAt) normalized.deletedAt = String(record.deletedAt);
+  return normalized;
+}
+
 function normalizedRecordDate(value, fallback = today()) {
   const candidate = String(value || "").trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(candidate) ? candidate : fallback;
@@ -1029,6 +1069,7 @@ function createExperiment(section, seed = {}) {
 async function loadExperiments() {
   experiments = (await getAllExperiments()).map((experiment) => {
     if (isSurgeryRecord(experiment)) return normalizeSurgeryRecord(experiment);
+    if (isAntibodyRecord(experiment)) return normalizeAntibodyRecord(experiment);
     if (!experiment.recordType) experiment.recordType = "notebook";
     if (!experiment.sectionId) experiment.sectionId = DEFAULT_SECTION_ID;
     if (!experiment.customFields || typeof experiment.customFields !== "object") {
@@ -1120,7 +1161,7 @@ function optionList(options, selected) {
 function sectionRecords(section) {
   const query = currentFilters.search.toLowerCase();
   return experiments.filter((experiment) => {
-    if (isSurgeryRecord(experiment)) return false;
+    if (isSurgeryRecord(experiment) || isAntibodyRecord(experiment)) return false;
     if (experiment.sectionId !== section.id) return false;
     if (!currentFilters.showDeleted && isDeletedRecord(experiment)) return false;
     if (!query) return true;
@@ -1251,8 +1292,9 @@ function renderShell(content) {
   editorImageResizeCleanup = null;
   revokeDriveObjectUrls();
   const surgeriesActive = /^#\/surger/.test(location.hash || "");
+  const antibodiesActive = /^#\/(ihc-if|antibody)(\/|$)/.test(location.hash || "");
   const terminationReminders = terminationReminderItems();
-  document.title = surgeriesActive ? `Surgeries | ${term("appName")}` : term("appName");
+  document.title = antibodiesActive ? `IHC/IF | ${term("appName")}` : surgeriesActive ? `Surgeries | ${term("appName")}` : term("appName");
   app.innerHTML = `
     <header class="topbar">
       <div class="brand-navigation">
@@ -1264,12 +1306,15 @@ function renderShell(content) {
           </span>
         </a>
         <nav class="primary-navigation" aria-label="Primary navigation">
-          <a class="primary-nav-link ${surgeriesActive ? "" : "active"}" href="#/" ${
-            surgeriesActive ? "" : 'aria-current="page"'
+          <a class="primary-nav-link ${surgeriesActive || antibodiesActive ? "" : "active"}" href="#/" ${
+            surgeriesActive || antibodiesActive ? "" : 'aria-current="page"'
           }>Notebook</a>
           <a class="primary-nav-link ${surgeriesActive ? "active" : ""}" href="#/surgeries" ${
             surgeriesActive ? 'aria-current="page"' : ""
           }>Surgeries</a>
+          <a class="primary-nav-link ${antibodiesActive ? "active" : ""}" href="#/ihc-if" ${
+            antibodiesActive ? 'aria-current="page"' : ""
+          }>IHC/IF</a>
         </nav>
       </div>
       <div class="topbar-actions">
@@ -1426,12 +1471,12 @@ function updateEditorLeaseUi() {
   // Preserve navigation and cached browsing while preventing form mutations.
   // The same check is enforced at the mutation boundaries below.
   document.querySelectorAll("#app input, #app textarea, #app select, .dialog-backdrop input, .dialog-backdrop textarea, .dialog-backdrop select").forEach((element) => {
-    if (element.matches("[data-surgery-search], [data-search], [data-surgery-sort], [data-surgery-show-deleted], [data-surgery-sort-direction], [data-show-deleted], [data-show-deleted-sections]")) return;
+    if (element.matches("[data-surgery-search], [data-search], [data-surgery-sort], [data-surgery-show-deleted], [data-surgery-sort-direction], [data-show-deleted], [data-show-deleted-sections], [data-antibody-search], [data-antibody-application], [data-antibody-validated], [data-antibody-show-deleted], [data-antibody-copy-text]")) return;
     element.disabled = true;
   });
   document.querySelectorAll("#app [contenteditable]").forEach((element) => { element.contentEditable = "false"; });
   document.querySelectorAll("#app button, .dialog-backdrop button").forEach((button) => {
-    if (button.matches("[data-enable-editing], [data-action='backup'], [data-action='export-backup'], [data-export-drafts], [data-dialog-close], [data-action='export-current'], [data-action='export-surgery'], [data-view-surgery-photo], [data-action='dismiss-termination-reminders'], [data-surgery-sort-direction]")) return;
+    if (button.matches("[data-enable-editing], [data-action='backup'], [data-action='export-backup'], [data-export-drafts], [data-dialog-close], [data-action='export-current'], [data-action='export-surgery'], [data-view-surgery-photo], [data-action='dismiss-termination-reminders'], [data-surgery-sort-direction], [data-copy-antibody-protocol]")) return;
     button.disabled = true;
   });
   document.querySelectorAll("[data-google-signin]").forEach((element) => { element.hidden = true; });
@@ -1540,6 +1585,8 @@ function updateSaveUi() {
   });
   if (activeExperiment) setSaveState(recordSaveLabel(activeExperiment.id));
   if (activeSurgery) setSurgerySaveState(recordSaveLabel(activeSurgery.id));
+  const antibodySaveState = app.querySelector("[data-antibody-save-state]");
+  if (activeAntibody && antibodySaveState) antibodySaveState.textContent = recordSaveLabel(activeAntibody.id);
   updateEditorLeaseUi();
 }
 
@@ -1842,6 +1889,324 @@ function renderColumnValue(column, experiment) {
   if (!value) return `<span class="subtle">-</span>`;
   if (column.type === "date") return escapeHtml(formatDate(value));
   return escapeHtml(String(value));
+}
+
+function antibodyProductUrl(value) {
+  try {
+    const url = new URL(value);
+    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
+  } catch { return ""; }
+}
+
+function antibodyValidationLabel(value) {
+  return { validated: "Lab validated", testing: "Optimizing", unverified: "Not yet validated" }[value] || "Not yet validated";
+}
+
+function antibodyStorageLocked() {
+  return Boolean(driveSettings.configuredByHost && !driveState.connected && !importedLocalOnly);
+}
+
+function requireAntibodyStorage() {
+  requireEditorLease();
+  if (!antibodyStorageLocked()) return true;
+  openDriveDialog();
+  return false;
+}
+
+function antibodyStorageNoticeMarkup() {
+  return antibodyStorageLocked() ? `<section class="storage-notice"><div>
+    <strong>Connect Drive to add or edit antibodies</strong><span>Your saved antibody library stays available to browse on this device.</span>
+    </div><button class="btn primary" type="button" data-action="connect-antibody-storage">${ICONS.drive} Connect Drive</button></section>` : "";
+}
+
+function antibodyMetadataMarkup(record) {
+  return `<dl class="antibody-meta">${[["Host", record.host], ["Reactive species", record.reactiveSpecies]]
+    .map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value || "Not recorded")}</dd></div>`).join("")}</dl>`;
+}
+
+function antibodyProtocolMarkup(record, protocol, detailed = false) {
+  return `<section class="antibody-protocol" aria-label="${escapeHtml(protocol.application)} protocol">
+    <div class="antibody-protocol-heading"><span class="pill">${escapeHtml(protocol.application)}</span>
+      <span class="antibody-validation ${escapeHtml(protocol.validation)}">${antibodyValidationLabel(protocol.validation)}</span></div>
+    <div class="antibody-protocol-summary">
+      <div class="antibody-concentration"><span>Working dilution / concentration</span><strong>${escapeHtml(protocol.concentration || "Not recorded")}</strong></div>
+      <div class="antibody-context"><span>Tissue / preparation</span><strong>${escapeHtml(protocol.context || "Not recorded")}</strong></div>
+      <div class="antibody-retrieval"><span>Antigen retrieval</span><strong>${escapeHtml(protocol.retrieval || "Not recorded")}</strong></div>
+      <button class="btn ghost" type="button" data-copy-antibody-protocol="${escapeHtml(protocol.id)}" data-antibody-id="${escapeHtml(record.id)}" aria-label="Copy ${escapeHtml(protocol.application)} protocol for ${escapeHtml(record.title)}">${ICONS.clipboard} Copy protocol</button>
+    </div>
+    ${detailed && protocol.incubation ? `<p class="antibody-protocol-notes"><strong>Incubation</strong> · ${escapeHtml(protocol.incubation)}</p>` : ""}
+    ${detailed && protocol.notes ? `<p class="antibody-protocol-notes">${escapeHtml(protocol.notes)}</p>` : ""}
+  </section>`;
+}
+
+function antibodyProtocolText(record, protocol) {
+  return [record.title, [record.manufacturer, record.catalogNumber].filter(Boolean).join(" · "),
+    `Host: ${record.host || "Not recorded"}`, `Reactive species: ${record.reactiveSpecies || "Not recorded"}`,
+    record.clone && `Clone: ${record.clone}`, record.lot && `Lot: ${record.lot}`,
+    `Application: ${protocol.application}`, `Validation: ${antibodyValidationLabel(protocol.validation)}`,
+    `Tissue / preparation: ${protocol.context || "Not recorded"}`,
+    `Working dilution / concentration: ${protocol.concentration || "Not recorded"}`,
+    `Antigen retrieval: ${protocol.retrieval || "Not recorded"}`,
+    protocol.incubation && `Incubation: ${protocol.incubation}`, protocol.notes && `Protocol notes: ${protocol.notes}`,
+    record.notes && `Antibody notes: ${record.notes}`, antibodyProductUrl(record.productUrl) && `Product / datasheet: ${antibodyProductUrl(record.productUrl)}`,
+  ].filter(Boolean).join("\n");
+}
+
+function bindAntibodyCopyButtons(records) {
+  app.querySelectorAll("[data-copy-antibody-protocol]").forEach((button) => button.addEventListener("click", async () => {
+    // Copy the conditions visible on screen even if a background sync has
+    // refreshed the cache since this view was rendered.
+    const record = records.find((item) => item.id === button.dataset.antibodyId);
+    const protocol = record?.protocols.find((item) => item.id === button.dataset.copyAntibodyProtocol);
+    if (!protocol) return;
+    const text = antibodyProtocolText(record, protocol);
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = "Copied";
+      const status = app.querySelector("[data-antibody-copy-status]");
+      if (status) status.textContent = `${protocol.application} protocol copied for ${record.title}.`;
+    } catch {
+      const dialog = document.createElement("div");
+      dialog.className = "dialog-backdrop";
+      dialog.innerHTML = `<div class="panel dialog" role="dialog" aria-modal="true" aria-labelledby="antibodyCopyTitle"><h2 id="antibodyCopyTitle">Copy protocol</h2>
+        <p class="dialog-copy">Select and copy the saved protocol below.</p><textarea class="textarea" rows="14" readonly aria-label="Protocol text" data-antibody-copy-text>${escapeHtml(text)}</textarea>
+        <div class="dialog-actions"><button class="btn" data-dialog-close>Close</button></div></div>`;
+      document.body.appendChild(dialog);
+      const wasInert = app.inert;
+      app.inert = true;
+      const textArea = dialog.querySelector("textarea");
+      const closeButton = dialog.querySelector("[data-dialog-close]");
+      wireDialogClose(dialog, () => { app.inert = wasInert; button.focus(); });
+      dialog.addEventListener("keydown", (event) => {
+        if (event.key !== "Tab") return;
+        if (event.shiftKey && document.activeElement === textArea) { event.preventDefault(); closeButton.focus(); }
+        else if (!event.shiftKey && document.activeElement === closeButton) { event.preventDefault(); textArea.focus(); }
+      });
+      textArea.focus();
+      textArea.select();
+    }
+  }));
+}
+
+function renderAntibodiesPage() {
+  activeExperiment = null;
+  activeSurgery = null;
+  activeAntibody = null;
+  const allRecords = experiments.filter(isAntibodyRecord);
+  const query = antibodyFilters.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matchesProtocol = (protocol) => (!antibodyFilters.application || protocol.application === antibodyFilters.application) &&
+    (!antibodyFilters.validated || protocol.validation === "validated");
+  const records = allRecords.filter((record) => {
+    if (isDeletedRecord(record) && !antibodyFilters.showDeleted) return false;
+    if ((antibodyFilters.application || antibodyFilters.validated) && !record.protocols.some(matchesProtocol)) return false;
+    const haystack = [record.title, record.catalogNumber, record.manufacturer, record.host, record.reactiveSpecies,
+      record.clone, record.lot, record.storage, record.notes, ...record.protocols.flatMap((protocol) =>
+        [protocol.application, protocol.context, protocol.concentration, protocol.retrieval, protocol.incubation, protocol.notes])].join(" ").toLowerCase();
+    return query.every((part) => haystack.includes(part));
+  }).sort((a, b) => a.title.localeCompare(b.title) || a.catalogNumber.localeCompare(b.catalogNumber));
+  const filtering = query.length || antibodyFilters.application || antibodyFilters.validated;
+  renderShell(`<main class="page antibodies-page">
+    <section class="page-header"><div><p class="eyebrow">Antibody library</p><h1>IHC/IF</h1>
+      <p class="page-description">Your antibodies and the staining conditions worth keeping.</p></div>
+      <div class="page-actions"><button class="btn primary" type="button" data-action="new-antibody">${ICONS.add} Add antibody</button></div></section>
+    ${antibodyStorageNoticeMarkup()}
+    <section class="antibody-controls" aria-label="Find antibodies">
+      <div class="search-control antibody-search">${ICONS.search}<input class="field" type="search" data-antibody-search aria-label="Search antibodies" placeholder="Search target, product code, host, species…" value="${escapeHtml(antibodyFilters.search)}" /></div>
+      <select class="select" data-antibody-application aria-label="Filter by application">${optionList([{ value: "", label: "IHC + IF" }, { value: "IHC", label: "IHC" }, { value: "IF", label: "IF" }], antibodyFilters.application)}</select>
+      <label class="filter-toggle"><input type="checkbox" data-antibody-validated ${antibodyFilters.validated ? "checked" : ""} /> Lab validated only</label>
+      ${allRecords.some(isDeletedRecord) ? `<label class="filter-toggle"><input type="checkbox" data-antibody-show-deleted ${antibodyFilters.showDeleted ? "checked" : ""} /> Show deleted</label>` : ""}
+    </section>
+    <p class="antibody-results-count" role="status">${records.length} ${records.length === 1 ? "antibody" : "antibodies"}${filtering ? " found" : " saved"}</p>
+    <div class="antibody-list">${records.length ? records.map((record) => `<article class="panel antibody-card ${isDeletedRecord(record) ? "is-deleted" : ""}">
+      <header class="antibody-card-header"><div><h2><a href="#/antibody/${escapeHtml(record.id)}">${escapeHtml(record.title)}</a></h2>
+        <p class="antibody-product">${escapeHtml([record.manufacturer, record.catalogNumber, record.clone && `Clone ${record.clone}`].filter(Boolean).join(" · ") || "Product details not recorded")}</p></div>
+        ${isDeletedRecord(record) ? '<span class="pill surgery-deleted">Deleted</span>' : ""}</header>
+      ${antibodyMetadataMarkup(record)}<div class="antibody-protocol-list">${record.protocols.length
+        ? record.protocols.filter(matchesProtocol).map((protocol) => antibodyProtocolMarkup(record, protocol)).join("")
+        : '<p class="antibody-note">No staining conditions recorded yet. Open this antibody to add a protocol.</p>'}</div></article>`).join("")
+      : `<div class="panel empty antibody-empty"><div><strong>${filtering ? "No matching antibodies" : "Keep your next staining protocol here"}</strong>
+        <span>${filtering ? "Try another product code or adjust the filters." : "Add an antibody once, then find its dilution and retrieval method without another search."}</span></div></div>`}</div>
+    <p class="save-state" role="status" aria-live="polite" data-antibody-copy-status></p></main>`);
+  app.querySelector("[data-action='new-antibody']").addEventListener("click", () => openAntibodyDialog());
+  app.querySelector("[data-action='connect-antibody-storage']")?.addEventListener("click", openDriveDialog);
+  for (const [attribute, key, eventName] of [["search", "search", "input"], ["application", "application", "change"], ["validated", "validated", "change"], ["show-deleted", "showDeleted", "change"]]) {
+    app.querySelector(`[data-antibody-${attribute}]`)?.addEventListener(eventName, (event) => {
+      const input = event.target;
+      const selection = input.selectionStart;
+      antibodyFilters[key] = input.type === "checkbox" ? input.checked : input.value;
+      renderAntibodiesPage();
+      const replacement = app.querySelector(`[data-antibody-${attribute}]`);
+      replacement?.focus();
+      if (attribute === "search" && selection !== null) replacement.setSelectionRange(selection, selection);
+    });
+  }
+  bindAntibodyCopyButtons(records);
+}
+
+async function renderAntibodyDetailPage(id) {
+  const saved = await getExperiment(id);
+  if (!isAntibodyRecord(saved)) { location.hash = "#/ihc-if"; return; }
+  activeExperiment = null;
+  activeSurgery = null;
+  const record = activeAntibody = normalizeAntibodyRecord(saved);
+  const deleted = isDeletedRecord(record);
+  const productUrl = antibodyProductUrl(record.productUrl);
+  renderShell(`<main class="page antibody-detail-page"><section class="page-header"><div>
+    <p class="eyebrow">${deleted ? "Deleted antibody" : "Antibody library"}</p><h1>${escapeHtml(record.title)}</h1>
+    <p class="antibody-product">${escapeHtml([record.manufacturer, record.catalogNumber].filter(Boolean).join(" · "))}</p></div>
+    <div class="page-actions"><span class="save-state" role="status" aria-live="polite" data-antibody-save-state>${escapeHtml(recordSaveLabel(record.id))}</span>
+      <a class="btn ghost" href="#/ihc-if">${ICONS.arrowLeft} Back</a>
+      ${deleted ? '<button class="btn primary" type="button" data-action="restore-antibody">Restore antibody</button>'
+        : `<button class="btn ghost danger" type="button" data-action="delete-antibody">${ICONS.trash} Delete</button><button class="btn primary" type="button" data-action="edit-antibody">Edit antibody</button>`}</div></section>
+    ${antibodyStorageNoticeMarkup()}
+    ${deleted ? '<p class="storage-notice">This antibody is deleted. Restore it to edit its saved protocols.</p>' : ""}
+    <div class="antibody-detail-grid"><section><h2>Staining protocols</h2>
+      <p class="page-description">Saved conditions for each application and tissue preparation.</p>
+      <div class="antibody-protocol-list">${record.protocols.length ? record.protocols.map((protocol) => antibodyProtocolMarkup(record, protocol, true)).join("")
+        : '<div class="panel empty antibody-empty">No protocols yet. Choose Edit antibody to add staining conditions.</div>'}</div></section>
+      <aside class="panel antibody-information"><h2>Antibody details</h2>${antibodyMetadataMarkup(record)}
+        <dl class="antibody-meta">${[["Clone", record.clone], ["Lot", record.lot], ["Storage location", record.storage]]
+          .map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value || "Not recorded")}</dd></div>`).join("")}</dl>
+        ${productUrl ? `<a class="antibody-source" href="${escapeHtml(productUrl)}" target="_blank" rel="noopener noreferrer">Product / datasheet ${ICONS.external || "↗"}</a>` : ""}
+        ${record.notes ? `<h3>Notes</h3><p class="antibody-note">${escapeHtml(record.notes)}</p>` : ""}</aside></div>
+    <p class="save-state" role="status" aria-live="polite" data-antibody-copy-status></p></main>`);
+  app.querySelector("[data-action='connect-antibody-storage']")?.addEventListener("click", openDriveDialog);
+  app.querySelector("[data-action='edit-antibody']")?.addEventListener("click", () => openAntibodyDialog(record));
+  for (const action of ["delete", "restore"]) {
+    app.querySelector(`[data-action='${action}-antibody']`)?.addEventListener("click", async (event) => {
+      if (!requireAntibodyStorage()) return;
+      if (action === "delete" && !window.confirm(`Delete "${record.title}"? You can restore it from Show deleted in IHC/IF.`)) return;
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        if (action === "delete") { await markExperimentDeleted(record); location.hash = "#/ihc-if"; }
+        else { await restoreExperimentRecord(record); await renderAntibodyDetailPage(record.id); }
+      } catch (error) { reportLocalSaveError(error); window.alert(error.message || String(error)); }
+      finally { button.disabled = false; }
+    });
+  }
+  bindAntibodyCopyButtons([record]);
+}
+
+function antibodyFieldMarkup(key, label, value, { placeholder = "", multiline = false, wide = false, required = false, protocol = false } = {}) {
+  const id = `antibody-field-${uid()}`;
+  const attributes = `id="${id}" ${protocol ? `data-protocol-field="${key}"` : `name="${key}"`} ${required ? "required" : ""} placeholder="${escapeHtml(placeholder)}"`;
+  return `<div class="field-group ${wide ? "antibody-form-wide" : ""}"><label class="field-label" for="${id}">${label}</label>
+    ${multiline ? `<textarea class="textarea" rows="3" ${attributes}>${escapeHtml(value)}</textarea>` : `<input class="field" ${attributes} value="${escapeHtml(value)}" />`}</div>`;
+}
+
+function antibodyProtocolEditorMarkup(protocol) {
+  const field = (key, label, options = {}) => antibodyFieldMarkup(key, label, protocol[key], { ...options, protocol: true });
+  return `<fieldset class="antibody-protocol-editor" data-antibody-protocol-editor data-protocol-id="${escapeHtml(protocol.id)}"><legend>Staining protocol</legend>
+    <div class="antibody-protocol-editor-heading"><span class="antibody-form-help">Use a separate protocol for each application or tissue preparation.</span><button class="btn ghost danger" type="button" data-remove-antibody-protocol>Remove protocol</button></div>
+    <div class="antibody-form-grid">
+      <label class="field-group"><span class="field-label">Application</span><select class="select" data-protocol-field="application">${optionList([{ value: "IHC", label: "IHC" }, { value: "IF", label: "IF" }], protocol.application)}</select></label>
+      <label class="field-group"><span class="field-label">Validation</span><select class="select" data-protocol-field="validation">${optionList(["unverified", "testing", "validated"].map((value) => ({ value, label: antibodyValidationLabel(value) })), protocol.validation)}</select></label>
+      ${field("concentration", "Working dilution / concentration", { placeholder: "e.g. 1:500 or 2 µg/mL" })}
+      ${field("context", "Tissue / preparation", { placeholder: "Species, tissue, fixation, section type" })}
+      ${field("retrieval", "Antigen retrieval", { placeholder: "Buffer, pH, temperature, time — or None" })}
+      ${field("incubation", "Primary incubation", { placeholder: "Time, temperature, diluent" })}
+      ${field("notes", "Protocol notes", { multiline: true, wide: true, placeholder: "Blocking, secondary / fluorophore, controls, results, source, tested by / date…" })}
+    </div></fieldset>`;
+}
+
+function openAntibodyDialog(existing) {
+  if (!requireAntibodyStorage() || antibodyEditor) return;
+  const record = normalizeAntibodyRecord(existing || { protocols: [normalizeAntibodyProtocol()] });
+  const previousFocus = document.activeElement;
+  const editor = antibodyEditor = { record, dirty: false, saving: false };
+  const dialog = document.createElement("div");
+  dialog.className = "dialog-backdrop";
+  const field = (key, label, options = {}) => antibodyFieldMarkup(key, label, record[key], options);
+  dialog.innerHTML = `<form class="panel dialog antibody-dialog" data-antibody-form role="dialog" aria-modal="true" aria-labelledby="antibodyDialogTitle">
+    <div class="dialog-heading"><div><p class="eyebrow">Antibody library</p><h2 id="antibodyDialogTitle">${existing ? "Edit antibody" : "Add antibody"}</h2></div>
+      <button class="icon-btn" type="button" data-dialog-close aria-label="Close">${ICONS.close}</button></div>
+    <div class="antibody-form-grid">
+      ${field("title", "Antibody / target *", { required: true, wide: true, placeholder: "Target or antibody name" })}
+      ${field("manufacturer", "Manufacturer", { placeholder: "Supplier" })}${field("catalogNumber", "Product / catalog code", { placeholder: "The code on the vial" })}
+      ${field("host", "Host species", { placeholder: "Species the antibody was raised in" })}${field("reactiveSpecies", "Reactive species", { placeholder: "Species recognized by the antibody" })}
+    </div>
+    <details class="antibody-extra-fields" ${record.clone || record.lot || record.storage || record.productUrl || record.notes ? "open" : ""}><summary>Product link, clone, lot, storage &amp; notes</summary>
+      <div class="antibody-form-grid">${field("productUrl", "Product / datasheet URL", { wide: true, placeholder: "https://…" })}
+        ${field("clone", "Clone")}${field("lot", "Lot number")}${field("storage", "Storage location", { wide: true, placeholder: "Freezer / fridge, box, position" })}
+        ${field("notes", "Antibody notes", { wide: true, multiline: true, placeholder: "Stock concentration, aliquots, handling, general observations…" })}</div></details>
+    <h3>Staining conditions</h3><p class="antibody-form-help">Record your working dilution or concentration with its tissue context. Mark it lab validated once tested.</p>
+    <div class="antibody-protocol-editors">${record.protocols.map(antibodyProtocolEditorMarkup).join("")}</div>
+    <button class="btn" type="button" data-add-antibody-protocol>${ICONS.add} Add another protocol</button>
+    <p class="save-state dialog-save-state" role="status" aria-live="polite" data-antibody-dialog-status>Changes save when you choose Save antibody.</p>
+    <div class="dialog-actions"><button class="btn ghost" type="button" data-dialog-close>Cancel</button><button class="btn primary" type="submit">Save antibody</button></div></form>`;
+  document.body.appendChild(dialog);
+  app.inert = true;
+  const form = dialog.querySelector("form");
+  const status = dialog.querySelector("[data-antibody-dialog-status]");
+  const cleanup = () => { antibodyEditor = null; dialog.remove(); app.inert = false; previousFocus?.focus(); };
+  const close = () => {
+    if (editor.saving) return;
+    if (failedLocalWrites.has(record.id)) { status.textContent = "Retry Save antibody before closing. The latest save failed on this device."; return; }
+    if (editor.dirty && !window.confirm("Discard unsaved antibody changes?")) return;
+    cleanup();
+  };
+  dialog.querySelectorAll("[data-dialog-close]").forEach((button) => button.addEventListener("click", close));
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) close(); });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); close(); }
+    if (event.key === "Tab") {
+      const controls = [...form.querySelectorAll("input, textarea, select, button, summary")].filter((element) => !element.disabled && element.getClientRects().length);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+  });
+  form.addEventListener("input", () => { editor.dirty = true; });
+  form.addEventListener("change", () => { editor.dirty = true; });
+  const bindRemove = (root) => root.querySelectorAll("[data-remove-antibody-protocol]").forEach((button) => button.addEventListener("click", () => {
+    if (!window.confirm("Remove this protocol? The change takes effect when you save the antibody.")) return;
+    button.closest("[data-antibody-protocol-editor]").remove();
+    editor.dirty = true;
+    form.querySelector("[data-add-antibody-protocol]").focus();
+  }));
+  bindRemove(form);
+  form.querySelector("[data-add-antibody-protocol]").addEventListener("click", () => {
+    const container = form.querySelector(".antibody-protocol-editors");
+    container.insertAdjacentHTML("beforeend", antibodyProtocolEditorMarkup(normalizeAntibodyProtocol()));
+    bindRemove(container.lastElementChild);
+    container.lastElementChild.querySelector("select").focus();
+    editor.dirty = true;
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (editor.saving) return;
+    const data = new FormData(form);
+    const fields = Object.fromEntries([...data].map(([key, value]) => [key, String(value).trim()]));
+    if (!fields.title) { form.querySelector("[name='title']").focus(); status.textContent = "Enter an antibody or target name."; return; }
+    if (fields.productUrl && !antibodyProductUrl(fields.productUrl)) {
+      form.querySelector("details").open = true;
+      form.querySelector("[name='productUrl']").focus();
+      status.textContent = "Use an http:// or https:// product link.";
+      return;
+    }
+    const protocols = [...form.querySelectorAll("[data-antibody-protocol-editor]")].map((fieldset) => {
+      const protocol = { id: fieldset.dataset.protocolId };
+      fieldset.querySelectorAll("[data-protocol-field]").forEach((input) => { protocol[input.dataset.protocolField] = input.value.trim(); });
+      return normalizeAntibodyProtocol(protocol);
+    });
+    const updated = normalizeAntibodyRecord({ ...record, ...fields, protocols, updatedAt: now() });
+    editor.saving = true;
+    form.inert = true;
+    status.textContent = "Saving on this device…";
+    try {
+      await stageRecordSave(updated);
+      cleanup();
+      if (location.hash === `#/antibody/${record.id}`) await renderAntibodyDetailPage(record.id);
+      else location.hash = `#/antibody/${record.id}`;
+      flushRecordDraft(record.id).catch(reportLocalSaveError);
+    } catch (error) {
+      reportLocalSaveError(error);
+      status.textContent = `Could not save. Keep this form open and try again. ${error.message || String(error)}`;
+    } finally { editor.saving = false; form.inert = false; }
+  });
+  form.querySelector("[name='title']").focus();
+  updateEditorLeaseUi();
 }
 
 function surgeryRecords({ includeDeleted = false } = {}) {
@@ -2817,6 +3182,13 @@ async function renderDetailPage(id) {
 
   if (isSurgeryRecord(activeExperiment)) {
     location.hash = `#/surgery/${activeExperiment.id}`;
+    return;
+  }
+
+  if (isAntibodyRecord(activeExperiment)) {
+    const antibodyId = activeExperiment.id;
+    activeExperiment = null;
+    location.hash = `#/antibody/${antibodyId}`;
     return;
   }
 
@@ -4155,6 +4527,7 @@ function normalizeBackupRecords(records) {
     .filter((record) => record && typeof record === "object")
     .map((record) => {
       if (isSurgeryRecord(record)) return normalizeSurgeryRecord(record);
+      if (isAntibodyRecord(record)) return normalizeAntibodyRecord(record);
       const timestamp = now();
       const customFields =
         record.customFields && typeof record.customFields === "object"
@@ -4405,12 +4778,12 @@ async function applyWorkspaceSnapshot(workspace, { preserveEditor = false } = {}
 
   // Capture after the async merge: navigation may have opened an older cached
   // form while it ran. Never grant that visible form a newly fetched baseline.
-  const editorBaselines = preserveEditor ? [activeExperiment, activeSurgery].filter(Boolean).map((record) => ({
+  const editorBaselines = [...(preserveEditor ? [activeExperiment, activeSurgery, activeAntibody] : []), antibodyEditor?.record].filter(Boolean).map((record) => ({
     id: record.id,
     record,
     modifiedTime: driveState.recordModifiedTimes[record.id],
     revision: driveState.recordRevisions[record.id],
-  })) : [];
+  }));
   driveState.recordModifiedTimes = Object.fromEntries(
     Object.entries(workspace?.recordMeta || {}).map(([id, meta]) => [
       id,
@@ -4929,7 +5302,16 @@ async function route() {
     return;
   }
   renderedHash = location.hash || "#/";
+  activeAntibody = null;
   const hash = location.hash || "#/";
+  if (hash.startsWith("#/antibody/")) {
+    await renderAntibodyDetailPage(hash.replace("#/antibody/", ""));
+    return;
+  }
+  if (hash === "#/ihc-if") {
+    renderAntibodiesPage();
+    return;
+  }
   if (hash.startsWith("#/surgery/")) {
     await renderSurgeryDetailPage(hash.replace("#/surgery/", ""));
     return;
@@ -4966,7 +5348,7 @@ async function init() {
   await loadExperiments();
   window.addEventListener("hashchange", route);
   window.addEventListener("beforeunload", (event) => {
-    if (localSaveOperations.size || failedLocalWrites.size || pendingDrafts.length) {
+    if (localSaveOperations.size || failedLocalWrites.size || pendingDrafts.length || antibodyEditor?.dirty) {
       event.preventDefault();
       event.returnValue = "";
     }

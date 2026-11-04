@@ -2500,3 +2500,508 @@ h1 {
     padding: 0 5px;
   }
 }
+
+/* Antibody reference library */
+.antibody-detail-page .btn.ghost.danger,
+.antibody-dialog .btn.ghost.danger {
+  color: var(--danger);
+}
+
+.page-description {
+  max-width: 660px;
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.antibody-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-subtle);
+}
+
+.antibody-search {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+
+.antibody-controls > .select {
+  width: auto;
+  min-width: 150px;
+}
+
+.antibody-results-count {
+  margin: 16px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.antibody-list,
+.antibody-protocol-list,
+.antibody-protocol-editors {
+  display: grid;
+  gap: 14px;
+}
+
+.antibody-card {
+  min-width: 0;
+  padding: 20px;
+}
+
+.antibody-card.is-deleted {
+  background: var(--surface-muted);
+  border-style: dashed;
+}
+
+.antibody-card-header,
+.antibody-protocol-heading,
+.antibody-protocol-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.antibody-card-header > div {
+  min-width: 0;
+}
+
+.antibody-card-header h2 {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.antibody-card-header h2 a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.antibody-card-header h2 a:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.antibody-product {
+  display: block;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.antibody-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin: 17px 0;
+}
+
+.antibody-meta > div {
+  min-width: 0;
+}
+
+.antibody-meta dt,
+.antibody-concentration > span,
+.antibody-context > span,
+.antibody-retrieval > span {
+  display: block;
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.antibody-meta dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.antibody-protocol {
+  min-width: 0;
+  padding: 15px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.antibody-protocol-heading {
+  justify-content: flex-start;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.antibody-protocol-heading strong {
+  overflow-wrap: anywhere;
+}
+
+.antibody-validation {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.antibody-validation.validated {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.antibody-validation.testing {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.antibody-protocol-summary {
+  display: grid;
+  grid-template-columns: minmax(145px, 0.8fr) minmax(140px, 1fr) minmax(150px, 1.3fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+
+.antibody-protocol-summary > * {
+  min-width: 0;
+}
+
+.antibody-concentration strong {
+  display: block;
+  color: var(--accent-strong);
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.antibody-context,
+.antibody-retrieval {
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.antibody-context strong,
+.antibody-retrieval strong {
+  font-weight: 650;
+}
+
+.antibody-protocol-summary > .btn {
+  align-self: center;
+  font-size: 12px;
+}
+
+.antibody-protocol-notes,
+.antibody-note {
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.antibody-protocol-notes {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.antibody-detail-page h1 {
+  overflow-wrap: anywhere;
+}
+
+.antibody-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+  align-items: start;
+  gap: 22px;
+}
+
+.antibody-detail-grid > * {
+  min-width: 0;
+}
+
+.antibody-detail-page .antibody-protocol-list {
+  margin-top: 16px;
+}
+
+.antibody-protocol-editors + .btn {
+  margin-top: 14px;
+}
+
+.antibody-detail-grid .antibody-protocol-summary {
+  grid-template-columns: minmax(120px, 1fr) minmax(130px, 1fr);
+}
+
+.antibody-detail-grid .antibody-protocol-summary > .btn {
+  justify-self: start;
+}
+
+.antibody-information {
+  padding: 20px;
+}
+
+.antibody-information h2 {
+  margin: 0 0 15px;
+  font-size: 16px;
+}
+
+.antibody-information .antibody-meta {
+  display: grid;
+  gap: 16px;
+}
+
+.antibody-source {
+  color: var(--accent-strong);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-underline-offset: 3px;
+}
+
+.antibody-dialog {
+  width: min(860px, 100%);
+  padding: 22px;
+}
+
+.antibody-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.antibody-form-grid > .field-group {
+  min-width: 0;
+  margin: 0;
+}
+
+.antibody-form-wide {
+  grid-column: 1 / -1;
+}
+
+.antibody-extra-fields {
+  margin: 20px 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.antibody-extra-fields > summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.antibody-extra-fields[open] > summary {
+  margin-bottom: 18px;
+}
+
+.antibody-extra-fields > summary:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.22);
+  outline-offset: 4px;
+}
+
+.antibody-protocol-editor {
+  min-width: 0;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.antibody-protocol-editor legend {
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.antibody-protocol-editor-heading {
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.antibody-protocol-editor-heading .btn {
+  min-height: 32px;
+  font-size: 12px;
+}
+
+.antibody-form-help {
+  margin: 8px 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.antibody-dialog .dialog-actions {
+  position: sticky;
+  bottom: -22px;
+  z-index: 1;
+  margin: 20px -22px -22px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.antibody-empty {
+  min-height: 220px;
+}
+
+@media (max-width: 980px) {
+  .antibody-protocol-summary {
+    grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr);
+  }
+
+  .antibody-protocol-summary > .btn {
+    justify-self: start;
+  }
+
+  .antibody-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .antibody-information .antibody-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .antibody-card {
+    padding: 16px;
+  }
+
+  .antibody-controls {
+    gap: 10px 16px;
+  }
+
+  .antibody-search {
+    flex-basis: 100%;
+  }
+
+  .antibody-controls > .select {
+    flex: 1;
+  }
+
+  .antibody-form-grid {
+    gap: 14px;
+  }
+}
+
+@media (max-width: 520px) {
+  /* Keep every primary destination visible alongside storage actions. */
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+  }
+
+  .brand-navigation {
+    display: contents;
+  }
+
+  .brand {
+    grid-column: 1;
+    grid-row: 1;
+    gap: 9px;
+  }
+
+  .brand-text {
+    display: flex;
+  }
+
+  .brand-name {
+    font-size: 12px;
+  }
+
+  .brand-subtitle {
+    display: none;
+  }
+
+  .topbar-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .primary-navigation {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+  }
+
+  .primary-nav-link,
+  .primary-nav-link:first-child {
+    display: inline-flex;
+    justify-content: center;
+    min-height: 36px;
+  }
+
+  .antibody-card-header {
+    align-items: flex-start;
+  }
+
+  .antibody-card-header h2 {
+    font-size: 18px;
+  }
+
+  .antibody-protocol {
+    padding: 13px;
+  }
+
+  .antibody-protocol-summary,
+  .antibody-detail-grid .antibody-protocol-summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .antibody-concentration strong {
+    font-size: 24px;
+  }
+
+  .antibody-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .antibody-dialog {
+    padding: 18px;
+  }
+
+  .antibody-dialog .dialog-actions {
+    bottom: -18px;
+    margin-right: -18px;
+    margin-bottom: -18px;
+    margin-left: -18px;
+    padding: 12px 18px;
+  }
+
+  .antibody-dialog .dialog-actions > .btn {
+    flex: 1;
+  }
+
+  .antibody-protocol-editor {
+    padding: 13px;
+  }
+}
