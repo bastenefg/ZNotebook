@@ -1142,6 +1142,61 @@ h1 {
   min-width: 0;
 }
 
+.surgery-row-animal {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.surgery-range-heading {
+  margin: 0;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--accent-strong);
+  font-size: 14px;
+}
+
+.surgery-range-help {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.surgery-animal-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 12px;
+}
+
+.surgery-animal-fields > .field-group { min-width: 0; }
+.surgery-animal-fields > .field-group + .field-group { margin-top: 0; }
+.field-group + .surgery-animal-fields,
+.surgery-animal-fields + .field-group { margin-top: 14px; }
+
+.collection-assessment {
+  margin-bottom: 16px;
+  padding: 16px 18px;
+  overflow-wrap: anywhere;
+}
+
+.collection-assessment h3 { margin: 0 0 8px; font-size: 14px; }
+.collection-assessment p { margin: 8px 0 0; white-space: pre-wrap; color: var(--muted); }
+.histology-section { margin-top: 28px; }
+.histology-section .subsection-heading { flex-wrap: wrap; gap: 12px; }
+.histology-section .subsection-heading > div { flex: 1 1 auto; min-width: 0; }
+.histology-slides { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 14px; }
+.histology-slide { min-width: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: white; }
+.histology-slide-details { display: grid; gap: 8px; padding: 12px; overflow-wrap: anywhere; }
+.histology-slide > .btn { margin: 0 12px 12px; }
+.histology-slide-icon { display: grid; place-items: center; min-height: 100px; background: var(--surface-muted); }
+.histology-slide-icon svg { width: 36px; height: 36px; fill: none; stroke: var(--accent-strong); stroke-width: 1.5; }
+.histology-slide-preview { display: block; max-height: 220px; }
+
 .surgery-row-heading {
   display: flex;
   align-items: center;

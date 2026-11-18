@@ -17,6 +17,12 @@ const ANTIBODY_SECTION_ID = "__antibodies__";
 const DEFAULT_RECORD_STATUS = "in-progress";
 const DEFAULT_RECORD_OUTCOME = "pending";
 const DEFAULT_RECORD_CONTENT = "<h2>Details</h2><ul><li></li></ul>";
+const INFLAMMATION_STATUSES = [
+  { value: "successful", label: "Successful" },
+  { value: "partially-successful", label: "Partially successful" },
+  { value: "non-successful", label: "Non successful" },
+];
+const ENDPOINT_RANGES = ["0-7", "8-14", "15-28", ">28"];
 
 const DEFAULT_STATUSES = [
   { value: "planned", label: "Planned" },
@@ -140,6 +146,7 @@ let surgeryFilters = {
   sortBy: { active: "performed", collected: "termination" },
   sortDirection: { active: "desc", collected: "desc" },
 };
+const surgeryUploadOperations = new Set();
 let taxonomy = loadTaxonomy();
 let driveSettings = loadDriveSettings();
 let connectionAttempt = null;
@@ -594,6 +601,82 @@ function formatEndpointDays(value) {
   return days === null ? "Not set" : formatElapsedDays(days);
 }
 
+function animalAgeAtSurgery(record) {
+  const days = daysBetweenDates(record.dateOfBirth, record.surgeryDate);
+  return days !== null && days >= 0 ? days : null;
+}
+
+function formatAnimalAge(record) {
+  if (!record.dateOfBirth) return "Not recorded";
+  const days = animalAgeAtSurgery(record);
+  if (days === null) return "Check birth and surgery dates";
+  const weeks = Math.floor(days / 7);
+  return `${formatElapsedDays(days)} (${weeks} ${weeks === 1 ? "week" : "weeks"}, ${formatElapsedDays(days % 7)})`;
+}
+
+function surgeryAnimalFieldsMarkup(record = {}, prefix = "new", locked = false) {
+  const disabled = locked ? "disabled" : "";
+  return `
+    <div class="field-group">
+      <label class="field-label" for="${prefix}DateOfBirth">Animal date of birth</label>
+      <input id="${prefix}DateOfBirth" class="field" name="dateOfBirth" type="date" value="${escapeHtml(record.dateOfBirth || "")}" ${disabled} data-date-of-birth-input />
+      <output class="planned-termination-preview" aria-live="polite">
+        <span>Age at surgery</span><strong data-animal-age-value>${escapeHtml(formatAnimalAge(record))}</strong>
+      </output>
+    </div>
+    <div class="surgery-animal-fields">
+      <div class="field-group">
+        <label class="field-label" for="${prefix}AnimalSex">Animal sex (M/F)</label>
+        <select id="${prefix}AnimalSex" class="select" name="animalSex" ${disabled}>
+          <option value="">Not recorded</option>
+          <option value="M" ${record.animalSex === "M" ? "selected" : ""}>M</option>
+          <option value="F" ${record.animalSex === "F" ? "selected" : ""}>F</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="${prefix}SurgeonName">Surgeon name</label>
+        <input id="${prefix}SurgeonName" class="field" name="surgeonName" value="${escapeHtml(record.surgeonName || "")}" ${disabled} />
+      </div>
+    </div>`;
+}
+
+function bindAnimalAgePreview(form, record = {}) {
+  const dateInput = form.querySelector("[data-surgery-date-input]");
+  const birthInput = form.querySelector("[data-date-of-birth-input]");
+  const output = form.querySelector("[data-animal-age-value]");
+  const update = () => {
+    birthInput.max = dateInput.value;
+    const age = daysBetweenDates(birthInput.value, dateInput.value);
+    birthInput.setCustomValidity(birthInput.value && (age === null || age < 0)
+      ? "Date of birth must be on or before the surgery date." : "");
+    dateInput.setCustomValidity(record.terminationDate && dateInput.value > record.terminationDate
+      ? "Surgery date must be on or before the termination date." : "");
+    output.textContent = formatAnimalAge({ dateOfBirth: birthInput.value, surgeryDate: dateInput.value });
+  };
+  dateInput.addEventListener("input", update);
+  birthInput.addEventListener("input", update);
+  update();
+}
+
+function inflammationLabel(value) {
+  return INFLAMMATION_STATUSES.find(option => option.value === value)?.label || "Not assessed";
+}
+
+function surgeryEndpointDays(record, view) {
+  return view === "collected"
+    ? normalizeEndpointDays(daysBetweenDates(record.surgeryDate, record.terminationDate))
+    : normalizeEndpointDays(record.plannedEndpointDays);
+}
+
+function surgeryEndpointRange(record, view) {
+  const days = surgeryEndpointDays(record, view);
+  return days === null ? "unknown" : ENDPOINT_RANGES[days <= 7 ? 0 : days <= 14 ? 1 : days <= 28 ? 2 : 3];
+}
+
+function endpointRangeLabel(range) {
+  return range === "unknown" ? "Not available" : `${range.replace("-", "–")} days`;
+}
+
 function bindPlannedTerminationPreview(root) {
   const dateInput = root.querySelector("[data-surgery-date-input]");
   const endpointInput = root.querySelector("[data-endpoint-days-input]");
@@ -1010,6 +1093,9 @@ function normalizeSurgeryRecord(record) {
     title: String(record.title || record.name || "Untitled surgery"),
     surgeryDate,
     startDate: surgeryDate,
+    dateOfBirth: calendarDayNumber(record.dateOfBirth) === null ? "" : String(record.dateOfBirth),
+    animalSex: ["M", "F"].includes(record.animalSex) ? record.animalSex : "",
+    surgeonName: String(record.surgeonName || ""),
     plannedEndpointDays: normalizeEndpointDays(record.plannedEndpointDays),
     surgeryNotes: String(record.surgeryNotes || record.notes || ""),
     surgeryPhotos: (Array.isArray(record.surgeryPhotos) ? record.surgeryPhotos : [])
@@ -1019,6 +1105,11 @@ function normalizeSurgeryRecord(record) {
       ? normalizedRecordDate(record.terminationDate, surgeryDate)
       : "",
     terminationNotes: String(record.terminationNotes || ""),
+    inflammationStatus: INFLAMMATION_STATUSES.some(option => option.value === record.inflammationStatus)
+      ? record.inflammationStatus : "",
+    inflammationNotes: String(record.inflammationNotes || ""),
+    histologySlides: (Array.isArray(record.histologySlides) ? record.histologySlides : [])
+      .map(normalizeHistologySlide).filter(Boolean),
     terminationPhotos: (Array.isArray(record.terminationPhotos) ? record.terminationPhotos : [])
       .map(normalizeSurgeryPhoto)
       .filter(Boolean),
@@ -1036,6 +1127,9 @@ function createSurgery(seed = {}) {
     recordType: "surgery",
     title: seed.title || "Untitled surgery",
     surgeryDate: seed.surgeryDate || today(),
+    dateOfBirth: seed.dateOfBirth,
+    animalSex: seed.animalSex,
+    surgeonName: seed.surgeonName,
     plannedEndpointDays: seed.plannedEndpointDays,
     surgeryNotes: seed.surgeryNotes || "",
     surgeryPhotos: [],
@@ -1432,7 +1526,7 @@ function updateConnectionUi() {
   // Do not allow edits to race with replacement of the local Drive snapshot.
   const page = app.querySelector("main");
   if (page) {
-    const blocksEditing = busy && !connectionAttempt?.background;
+    const blocksEditing = (busy && !connectionAttempt?.background) || surgeryUploadOperations.size > 0;
     page.inert = blocksEditing;
     page.setAttribute("aria-busy", String(blocksEditing));
   }
@@ -1476,7 +1570,7 @@ function updateEditorLeaseUi() {
   });
   document.querySelectorAll("#app [contenteditable]").forEach((element) => { element.contentEditable = "false"; });
   document.querySelectorAll("#app button, .dialog-backdrop button").forEach((button) => {
-    if (button.matches("[data-enable-editing], [data-action='backup'], [data-action='export-backup'], [data-export-drafts], [data-dialog-close], [data-action='export-current'], [data-action='export-surgery'], [data-view-surgery-photo], [data-action='dismiss-termination-reminders'], [data-surgery-sort-direction], [data-copy-antibody-protocol]")) return;
+    if (button.matches("[data-enable-editing], [data-action='backup'], [data-action='export-backup'], [data-export-drafts], [data-dialog-close], [data-action='export-current'], [data-action='export-surgery'], [data-action='export-surgeries-csv'], [data-download-histology], [data-view-surgery-photo], [data-action='dismiss-termination-reminders'], [data-surgery-sort-direction], [data-copy-antibody-protocol]")) return;
     button.disabled = true;
   });
   document.querySelectorAll("[data-google-signin]").forEach((element) => { element.hidden = true; });
@@ -2252,6 +2346,12 @@ function surgeryMatchesSearch(record, query) {
     record.surgeryNotes,
     record.terminationDate,
     record.terminationNotes,
+    record.dateOfBirth,
+    record.animalSex,
+    record.surgeonName,
+    inflammationLabel(record.inflammationStatus),
+    record.inflammationNotes,
+    ...(record.histologySlides || []).map(slide => slide.name),
   ]
     .join(" ")
     .toLowerCase()
@@ -2268,6 +2368,13 @@ function surgerySortDate(record, view, sortBy) {
 }
 
 function compareSurgeryRecords(a, b, view, sortBy, direction) {
+  if (sortBy === "endpoint-range") {
+    const aDays = surgeryEndpointDays(a, view), bDays = surgeryEndpointDays(b, view);
+    if (aDays === null && bDays !== null) return 1;
+    if (aDays !== null && bDays === null) return -1;
+    const order = (aDays ?? 0) - (bDays ?? 0);
+    return (direction === "desc" ? -order : order) || a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+  }
   const aDate = surgerySortDate(a, view, sortBy);
   const bDate = surgerySortDate(b, view, sortBy);
   if (aDate && !bDate) return -1;
@@ -2333,6 +2440,12 @@ function renderSurgeryRow(record, collected) {
             ? `Deleted ${formatDateTime(record.deletedAt)}`
             : record.surgeryNotes || (collected ? record.terminationNotes : "No surgical notes"),
         )}</span>
+        <span class="surgery-row-animal">${escapeHtml([
+          record.animalSex,
+          record.dateOfBirth ? `Age: ${formatAnimalAge(record)}` : "",
+          record.surgeonName ? `Surgeon: ${record.surgeonName}` : "",
+        ].filter(Boolean).join(" · "))}</span>
+        ${collected ? `<span class="surgery-row-animal">Inflammation: ${escapeHtml(inflammationLabel(record.inflammationStatus))} · ${record.histologySlides.length} histology slides</span>` : ""}
       </div>
       <dl class="surgery-row-meta">
         <div>
@@ -2381,6 +2494,51 @@ function renderSurgeryRow(record, collected) {
   `;
 }
 
+function renderSurgeryList(records, view, sortBy) {
+  let previousRange;
+  return records.map(record => {
+    const range = surgeryEndpointRange(record, view);
+    const heading = sortBy === "endpoint-range" && range !== previousRange
+      ? `<h2 class="surgery-range-heading" data-endpoint-range="${escapeHtml(range)}">${escapeHtml(endpointRangeLabel(range))}</h2>` : "";
+    previousRange = range;
+    return heading + renderSurgeryRow(record, view === "collected");
+  }).join("");
+}
+
+function surgeryCsv(records, view) {
+  const headers = ["record_id", "surgery_name", "surgery_date", "date_of_birth", "age_at_surgery_days",
+    "animal_sex", "surgeon_name", "planned_endpoint_days", "planned_termination_date", "termination_date",
+    "actual_endpoint_days", "endpoint_range", "inflammation_status", "inflammation_notes", "surgery_notes",
+    "collection_notes", "histology_slide_count", "histology_slide_names", "histology_slide_drive_ids", "deleted_at"];
+  const cell = value => {
+    let text = String(value ?? "");
+    // Keep user-entered values from executing as spreadsheet formulas.
+    if (/^[\s\uFEFF]*[=+@-]/.test(text) || /^[\t\r\n]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+  const rows = records.map(record => [record.id, record.title, record.surgeryDate, record.dateOfBirth,
+    animalAgeAtSurgery(record), record.animalSex, record.surgeonName, record.plannedEndpointDays,
+    calculatePlannedTerminationDate(record.surgeryDate, record.plannedEndpointDays), record.terminationDate,
+    record.terminationDate ? surgeryEndpointDays(record, "collected") : "",
+    surgeryEndpointRange(record, view) === "unknown" ? "" : surgeryEndpointRange(record, view),
+    record.inflammationStatus, record.inflammationNotes, record.surgeryNotes, record.terminationNotes,
+    record.histologySlides.length, record.histologySlides.map(slide => slide.name).join("; "),
+    record.histologySlides.map(slide => slide.driveFileId).filter(Boolean).join("; "), record.deletedAt]);
+  return [headers, ...rows].map(row => row.map(cell).join(",")).join("\r\n");
+}
+
+function exportSurgeriesCsv(records, view) {
+  const blob = new Blob(["\uFEFF", surgeryCsv(records, view)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `surgeries-${view}-${today()}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function renderSurgeriesPage(view = "active") {
   activeExperiment = null;
   activeSurgery = null;
@@ -2399,7 +2557,8 @@ function renderSurgeriesPage(view = "active") {
     ? [...liveRecords, ...deletedRecords]
     : liveRecords;
   const query = surgeryFilters.search.trim().toLowerCase();
-  const sortBy = surgeryFilters.sortBy[selectedView] === "termination" ? "termination" : "performed";
+  const sortBy = ["termination", "endpoint-range"].includes(surgeryFilters.sortBy[selectedView])
+    ? surgeryFilters.sortBy[selectedView] : "performed";
   const sortDirection = surgeryFilters.sortDirection[selectedView] === "asc" ? "asc" : "desc";
   const visibleRecords = sourceRecords
     .filter((record) => surgeryMatchesSearch(record, query))
@@ -2413,6 +2572,7 @@ function renderSurgeriesPage(view = "active") {
           <h1>Surgeries</h1>
         </div>
         <div class="page-actions surgery-page-actions">
+          <button class="btn ghost" type="button" data-action="export-surgeries-csv" ${visibleRecords.length ? "" : "disabled"} title="Export records in the current view and search">${ICONS.download} Export CSV</button>
           <button class="btn ghost" type="button" data-action="new-surgery-manual">${ICONS.add} Add manually</button>
           <button class="btn primary" type="button" data-action="take-surgery-photo">${ICONS.camera} Take picture</button>
         </div>
@@ -2447,11 +2607,12 @@ function renderSurgeriesPage(view = "active") {
             <select id="surgerySort" class="select" data-surgery-sort>
               <option value="performed" ${sortBy === "performed" ? "selected" : ""}>Date performed</option>
               <option value="termination" ${sortBy === "termination" ? "selected" : ""}>Termination date</option>
+              <option value="endpoint-range" ${sortBy === "endpoint-range" ? "selected" : ""}>Endpoint range</option>
             </select>
             <button class="icon-btn" type="button" title="${
-              sortDirection === "desc" ? "Latest dates first" : "Earliest dates first"
+              sortBy === "endpoint-range" ? (sortDirection === "desc" ? "Longest endpoints first" : "Shortest endpoints first") : (sortDirection === "desc" ? "Latest dates first" : "Earliest dates first")
             }" aria-label="${
-              sortDirection === "desc" ? "Sort latest dates first" : "Sort earliest dates first"
+              sortBy === "endpoint-range" ? (sortDirection === "desc" ? "Sort longest endpoints first" : "Sort shortest endpoints first") : (sortDirection === "desc" ? "Sort latest dates first" : "Sort earliest dates first")
             }" data-surgery-sort-direction>${
               sortDirection === "desc" ? ICONS.arrowDown : ICONS.arrowUp
             }</button>
@@ -2469,12 +2630,11 @@ function renderSurgeriesPage(view = "active") {
         </div>
       </section>
 
+      ${sortBy === "endpoint-range" ? `<p class="surgery-range-help">${selectedView === "collected" ? "Actual days from surgery to collection" : "Planned endpoint days"}: 0–7, 8–14, 15–28, &gt;28. Missing or invalid durations appear last.</p>` : ""}
       <div class="panel surgery-list">
         ${
           visibleRecords.length
-            ? visibleRecords
-                .map((record) => renderSurgeryRow(record, selectedView === "collected"))
-                .join("")
+            ? renderSurgeryList(visibleRecords, selectedView, sortBy)
             : `<div class="empty surgery-empty">
                 <div class="empty-icon">${selectedView === "collected" ? ICONS.checkCircle : ICONS.clipboard}</div>
                 <div>
@@ -2493,6 +2653,7 @@ function renderSurgeriesPage(view = "active") {
   `);
 
   const cameraInput = app.querySelector("[data-surgery-page-camera]");
+  app.querySelector("[data-action='export-surgeries-csv']").addEventListener("click", () => exportSurgeriesCsv(visibleRecords, selectedView));
   app.querySelectorAll("[data-action='take-surgery-photo']").forEach((button) => {
     button.addEventListener("click", () => {
       if (requireSurgeryStorage()) cameraInput.click();
@@ -2515,7 +2676,8 @@ function renderSurgeriesPage(view = "active") {
   });
   app.querySelector("[data-surgery-sort]").addEventListener("change", (event) => {
     surgeryFilters.sortBy[selectedView] =
-      event.target.value === "termination" ? "termination" : "performed";
+      ["termination", "endpoint-range"].includes(event.target.value) ? event.target.value : "performed";
+    if (event.target.value === "endpoint-range") surgeryFilters.sortDirection[selectedView] = "asc";
     renderSurgeriesPage(selectedView);
     app.querySelector("[data-surgery-sort]").focus();
   });
@@ -2623,6 +2785,7 @@ function openNewSurgeryDialog(initialFiles = []) {
         <label class="field-label" for="surgeryDate">Surgery date</label>
         <input id="surgeryDate" class="field" name="surgeryDate" type="date" required value="${today()}" data-surgery-date-input />
       </div>
+      ${surgeryAnimalFieldsMarkup({ surgeryDate: today() })}
       <div class="field-group">
         <label class="field-label" for="surgeryEndpointDays">Desired endpoint (days)</label>
         <input id="surgeryEndpointDays" class="field" name="plannedEndpointDays" type="number" min="0" step="1" inputmode="numeric" placeholder="14" data-endpoint-days-input />
@@ -2654,27 +2817,35 @@ function openNewSurgeryDialog(initialFiles = []) {
   const photoManager = createPendingPhotoManager(dialog, initialFiles);
   wireDialogClose(dialog, photoManager.cleanup);
   bindPlannedTerminationPreview(form);
+  bindAnimalAgePreview(form);
   dialog.querySelector("#surgeryName").focus();
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!form.reportValidity()) return;
     const data = new FormData(form);
     const surgery = createSurgery({
       title: String(data.get("title") || "").trim(),
       surgeryDate: String(data.get("surgeryDate") || today()),
+      dateOfBirth: String(data.get("dateOfBirth") || ""),
+      animalSex: String(data.get("animalSex") || ""),
+      surgeonName: String(data.get("surgeonName") || "").trim(),
       plannedEndpointDays: data.get("plannedEndpointDays"),
       surgeryNotes: String(data.get("surgeryNotes") || "").trim(),
     });
     const files = photoManager.files();
     submit.disabled = true;
+    form.inert = true;
     status.textContent = "Saving surgery...";
     let savedLocally = false;
 
     try {
-      await saveExperimentRecord(surgery);
-      savedLocally = true;
-      await appendSurgeryPhotos(surgery, "surgeryPhotos", files, (index, total) => {
-        status.textContent = `Uploading photo ${index} of ${total}...`;
+      await trackSurgeryUpload(async () => {
+        await saveExperimentRecord(surgery);
+        savedLocally = true;
+        await appendSurgeryPhotos(surgery, "surgeryPhotos", files, (index, total) => {
+          status.textContent = `Uploading photo ${index} of ${total}...`;
+        });
       });
       await loadExperiments();
       photoManager.cleanup();
@@ -2700,7 +2871,7 @@ function openNewSurgeryDialog(initialFiles = []) {
           window.alert(error.message || String(error));
         }
       }
-    }
+    } finally { form.inert = false; }
   });
 }
 
@@ -2863,6 +3034,7 @@ async function renderSurgeryDetailPage(id) {
               activeSurgery.surgeryDate,
             )}" data-surgery-date-input />
           </div>
+          ${surgeryAnimalFieldsMarkup(activeSurgery, "detail", recordLocked)}
           ${
             !collected
               ? `<div class="field-group">
@@ -2920,16 +3092,31 @@ async function renderSurgeryDetailPage(id) {
                 <div class="collection-duration-block">
                   <span>Days from surgery</span>
                   <strong>${escapeHtml(formatElapsedDays(elapsedDays))}</strong>
+                  <span>Endpoint range: ${escapeHtml(endpointRangeLabel(surgeryEndpointRange(activeSurgery, "collected")))}</span>
                 </div>
                 <div class="collection-notes-block">
                   <span>Termination and collection notes</span>
                   <p>${escapeHtml(activeSurgery.terminationNotes || "No termination notes added.")}</p>
                 </div>
               </div>
+              <div class="collection-assessment panel">
+                <h3>Inflammation assessment</h3>
+                <strong>${escapeHtml(inflammationLabel(activeSurgery.inflammationStatus))}</strong>
+                <p>${escapeHtml(activeSurgery.inflammationNotes || "No inflammation notes added.")}</p>
+              </div>
               ${renderSurgeryGallery(
                 activeSurgery.terminationPhotos,
                 "Add tissue, collection, or termination record photos.",
               )}
+              <div class="histology-section">
+                <div class="subsection-heading">
+                  <div><h2>Histology slides</h2><p class="surgery-range-help">Upload original images, PDF, TIFF, SVS, NDPI, or MRXS files. Up to 25 MiB per file.</p></div>
+                  <button class="btn ghost" type="button" data-action="upload-histology" ${recordLocked ? "disabled" : ""}>${ICONS.upload} Upload slides</button>
+                </div>
+                <input class="hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.tif,.tiff,.pdf,.svs,.ndpi,.mrxs" multiple data-histology-input ${recordLocked ? "disabled" : ""} />
+                <p class="save-state" role="status" aria-live="polite" data-histology-upload-status></p>
+                <div data-histology-gallery>${renderHistologySlides(activeSurgery.histologySlides)}</div>
+              </div>
             </section>`
           : `<section class="collection-callout">
               <div class="collection-callout-icon">${ICONS.checkCircle}</div>
@@ -2947,26 +3134,19 @@ async function renderSurgeryDetailPage(id) {
 
   const detailsForm = app.querySelector("[data-surgery-details-form]");
   bindPlannedTerminationPreview(detailsForm);
+  bindAnimalAgePreview(detailsForm, activeSurgery);
   detailsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (deleted || !requireSurgeryStorage()) return;
-    const data = new FormData(detailsForm);
+    if (deleted || !requireSurgeryStorage() || !detailsForm.reportValidity()) return;
+    const surgery = surgeryFromDetailsForm(activeSurgery, detailsForm);
     const button = detailsForm.querySelector("[type='submit']");
     button.disabled = true;
     setSurgerySaveState("Saving...");
-    activeSurgery.title = String(data.get("title") || "").trim();
-    activeSurgery.surgeryDate = normalizedRecordDate(data.get("surgeryDate"));
-    activeSurgery.startDate = activeSurgery.surgeryDate;
-    if (!collected) {
-      activeSurgery.plannedEndpointDays = normalizeEndpointDays(data.get("plannedEndpointDays"));
-    }
-    activeSurgery.surgeryNotes = String(data.get("surgeryNotes") || "").trim();
-    activeSurgery.updatedAt = now();
 
     try {
-      await saveExperimentRecord(activeSurgery);
+      await trackSurgeryUpload(() => saveExperimentRecord(surgery));
       await loadExperiments();
-      await renderSurgeryDetailPage(activeSurgery.id);
+      if (location.hash === `#/surgery/${surgery.id}`) await renderSurgeryDetailPage(surgery.id);
     } catch (error) {
       console.error(error);
       setSurgerySaveState("Save failed");
@@ -2990,10 +3170,42 @@ async function renderSurgeryDetailPage(id) {
   });
 
   app.querySelector("[data-action='terminate-surgery']")?.addEventListener("click", () => {
-    openTerminationDialog(activeSurgery, false);
+    if (detailsForm.reportValidity()) openTerminationDialog(surgeryFromDetailsForm(activeSurgery, detailsForm), false);
   });
   app.querySelector("[data-action='edit-termination']")?.addEventListener("click", () => {
-    openTerminationDialog(activeSurgery, true);
+    if (detailsForm.reportValidity()) openTerminationDialog(surgeryFromDetailsForm(activeSurgery, detailsForm), true);
+  });
+  const slideInput = app.querySelector("[data-histology-input]");
+  app.querySelector("[data-action='upload-histology']")?.addEventListener("click", () => {
+    if (detailsForm.reportValidity()) slideInput.click();
+  });
+  slideInput?.addEventListener("change", async () => {
+    const files = Array.from(slideInput.files || []);
+    slideInput.value = "";
+    if (!files.length || recordLocked || !requireSurgeryStorage() || !detailsForm.reportValidity()) return;
+    const surgery = surgeryFromDetailsForm(activeSurgery, detailsForm);
+    const page = app.querySelector(".surgery-detail-page");
+    const status = page.querySelector("[data-histology-upload-status]");
+    const originalSlideCount = surgery.histologySlides.length;
+    page.inert = true;
+    try {
+      await appendHistologySlides(surgery, files, (index, total) => {
+        status.textContent = `Uploading slide ${index} of ${total}…`;
+      });
+      await loadExperiments();
+      if (location.hash === `#/surgery/${surgery.id}`) await renderSurgeryDetailPage(surgery.id);
+    } catch (error) {
+      // Keep the form and any successfully attached files available for retry.
+      if (location.hash === `#/surgery/${surgery.id}`) {
+        activeSurgery = surgery;
+        const savedCount = surgery.histologySlides.length - originalSlideCount;
+        status.textContent = `Upload stopped: ${error.message || String(error)} ${savedCount} of ${files.length} slides saved. Select the remaining files to retry.`;
+        const gallery = page.querySelector("[data-histology-gallery]");
+        gallery.innerHTML = renderHistologySlides(surgery.histologySlides);
+        bindHistologyDownloads(gallery, surgery);
+        hydrateDriveMedia(gallery);
+      }
+    } finally { page.inert = false; updateConnectionUi(); }
   });
   app.querySelector("[data-action='delete-surgery']")?.addEventListener("click", async (event) => {
     if (!requireSurgeryStorage()) return;
@@ -3036,7 +3248,22 @@ async function renderSurgeryDetailPage(id) {
   });
   bindSurgeryStorageNotice();
   bindSurgeryPhotoLightbox(app.querySelector(".surgery-detail-page"));
+  bindHistologyDownloads(app.querySelector(".surgery-detail-page"), activeSurgery);
   hydrateDriveMedia(app.querySelector(".surgery-detail-page"));
+}
+
+function surgeryFromDetailsForm(record, form) {
+  const data = new FormData(form);
+  return normalizeSurgeryRecord({ ...record,
+    title: String(data.get("title") || "").trim(),
+    surgeryDate: String(data.get("surgeryDate") || ""),
+    dateOfBirth: String(data.get("dateOfBirth") || ""),
+    animalSex: String(data.get("animalSex") || ""),
+    surgeonName: String(data.get("surgeonName") || "").trim(),
+    plannedEndpointDays: record.terminationDate ? record.plannedEndpointDays : data.get("plannedEndpointDays"),
+    surgeryNotes: String(data.get("surgeryNotes") || "").trim(),
+    updatedAt: now(),
+  });
 }
 
 function setSurgerySaveState(label) {
@@ -3046,18 +3273,24 @@ function setSurgerySaveState(label) {
 
 async function addPhotosToActiveSurgery(field, files) {
   if (!activeSurgery || !requireSurgeryStorage()) return;
+  const page = app.querySelector(".surgery-detail-page");
+  const form = page.querySelector("[data-surgery-details-form]");
+  if (!form.reportValidity()) return;
+  const surgery = surgeryFromDetailsForm(activeSurgery, form);
+  page.inert = true;
   try {
-    await appendSurgeryPhotos(activeSurgery, field, files, (index, total) => {
+    await appendSurgeryPhotos(surgery, field, files, (index, total) => {
       setSurgerySaveState(`Uploading photo ${index} of ${total}...`);
     });
     await loadExperiments();
-    await renderSurgeryDetailPage(activeSurgery.id);
+    if (location.hash === `#/surgery/${surgery.id}`) await renderSurgeryDetailPage(surgery.id);
   } catch (error) {
     console.error(error);
+    if (location.hash === `#/surgery/${surgery.id}`) activeSurgery[field] = surgery[field];
     setSurgerySaveState("Upload failed");
     if (driveState.connected) handleDriveError(error);
     else window.alert(error.message || String(error));
-  }
+  } finally { page.inert = false; updateConnectionUi(); }
 }
 
 function openTerminationDialog(surgery, editing) {
@@ -3091,6 +3324,17 @@ function openTerminationDialog(surgery, editing) {
         )}</textarea>
       </div>
       <div class="field-group">
+        <label class="field-label" for="inflammationStatus">Inflammation assessment</label>
+        <select id="inflammationStatus" class="select" name="inflammationStatus">
+          <option value="">Not assessed</option>
+          ${INFLAMMATION_STATUSES.map(option => `<option value="${option.value}" ${surgery.inflammationStatus === option.value ? "selected" : ""}>${option.label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="inflammationNotes">Inflammation notes</label>
+        <textarea id="inflammationNotes" class="textarea surgery-notes-input" name="inflammationNotes" placeholder="Optional assessment notes">${escapeHtml(surgery.inflammationNotes)}</textarea>
+      </div>
+      <div class="field-group">
         <span class="field-label">Collection photos</span>
         ${pendingPhotoControlsMarkup()}
       </div>
@@ -3112,19 +3356,25 @@ function openTerminationDialog(surgery, editing) {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!form.reportValidity()) return;
     const data = new FormData(form);
     const files = photoManager.files();
     submit.disabled = true;
+    form.inert = true;
     status.textContent = "Saving collection record...";
     surgery.terminationDate = normalizedRecordDate(data.get("terminationDate"), today());
     surgery.terminationNotes = String(data.get("terminationNotes") || "").trim();
+    surgery.inflammationStatus = String(data.get("inflammationStatus") || "");
+    surgery.inflammationNotes = String(data.get("inflammationNotes") || "").trim();
     surgery.terminatedAt = surgery.terminatedAt || now();
     surgery.updatedAt = now();
 
     try {
-      await saveExperimentRecord(surgery);
-      await appendSurgeryPhotos(surgery, "terminationPhotos", files, (index, total) => {
-        status.textContent = `Uploading photo ${index} of ${total}...`;
+      await trackSurgeryUpload(async () => {
+        await saveExperimentRecord(surgery);
+        await appendSurgeryPhotos(surgery, "terminationPhotos", files, (index, total) => {
+          status.textContent = `Uploading photo ${index} of ${total}...`;
+        });
       });
       await loadExperiments();
       photoManager.cleanup();
@@ -3137,7 +3387,7 @@ function openTerminationDialog(surgery, editing) {
       status.textContent = "Save failed";
       if (driveState.connected) handleDriveError(error);
       else window.alert(error.message || String(error));
-    }
+    } finally { form.inert = false; }
   });
 }
 
@@ -4933,7 +5183,180 @@ function isImageFile(file) {
   );
 }
 
+const HISTOLOGY_MAX_FILE_BYTES = 25 * 1024 * 1024;
+const HISTOLOGY_FILE_MIME_TYPES = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  tif: "image/tiff",
+  tiff: "image/tiff",
+  pdf: "application/pdf",
+  svs: "application/octet-stream",
+  ndpi: "application/octet-stream",
+  mrxs: "application/octet-stream",
+};
+
+function normalizeHistologySlide(slide) {
+  if (!slide || typeof slide !== "object") return null;
+  const driveFileId = String(slide.driveFileId || "").trim();
+  const candidateDataUrl = String(slide.dataUrl || "").trim();
+  const dataMatch = candidateDataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif|tiff)|application\/(?:pdf|octet-stream));base64,([a-z0-9+/]*={0,2})$/i);
+  const dataUrl = dataMatch ? candidateDataUrl : "";
+  if (!driveFileId && !dataUrl) return null;
+  const name = String(slide.name || "Histology slide");
+  const extension = name.split(".").pop().toLowerCase();
+  const candidateMime = String(slide.mimeType || "").toLowerCase();
+  const mimeType = dataMatch
+    ? dataMatch[1].toLowerCase()
+    : Object.values(HISTOLOGY_FILE_MIME_TYPES).includes(candidateMime)
+      ? candidateMime
+      : Object.prototype.hasOwnProperty.call(HISTOLOGY_FILE_MIME_TYPES, extension)
+        ? HISTOLOGY_FILE_MIME_TYPES[extension]
+        : "application/octet-stream";
+  const size = slide.size == null || slide.size === "" ? NaN : Number(slide.size);
+  return {
+    id: String(slide.id || uid()),
+    name,
+    mimeType,
+    size: Number.isSafeInteger(size) && size >= 0 ? size : null,
+    driveFileId,
+    dataUrl,
+    createdAt: String(slide.createdAt || now()),
+  };
+}
+
+function validateHistologyFile(file) {
+  const name = String(file?.name || "The selected file");
+  const extension = name.split(".").pop().toLowerCase();
+  const mimeType = Object.prototype.hasOwnProperty.call(HISTOLOGY_FILE_MIME_TYPES, extension)
+    ? HISTOLOGY_FILE_MIME_TYPES[extension] : "";
+  if (!mimeType) {
+    throw new Error(`${name}: choose a PNG, JPEG, WebP, GIF, TIFF, PDF, SVS, NDPI, or MRXS file.`);
+  }
+  const suppliedMime = String(file.type || "").toLowerCase();
+  const aliases = { "image/jpg": "image/jpeg", "image/x-tiff": "image/tiff" };
+  const normalizedMime = aliases[suppliedMime] || suppliedMime;
+  const isWholeSlide = ["svs", "ndpi", "mrxs"].includes(extension);
+  if (normalizedMime && normalizedMime !== "application/octet-stream" && normalizedMime !== mimeType &&
+      !(isWholeSlide && normalizedMime === "image/tiff")) {
+    throw new Error(`${name}: the file type does not match its extension. Choose a supported slide file.`);
+  }
+  if (!Number.isSafeInteger(file.size) || file.size <= 0) {
+    throw new Error(`${name}: the file is empty or could not be read.`);
+  }
+  if (file.size > HISTOLOGY_MAX_FILE_BYTES) {
+    throw new Error(`${name}: histology uploads are limited to 25 MiB per file. Choose a smaller slide export.`);
+  }
+  return mimeType;
+}
+
+async function storeHistologySlide(recordId, file) {
+  if (surgeryStorageLocked()) throw new Error("Connect Drive before uploading slides.");
+  const mimeType = validateHistologyFile(file);
+  const metadata = { id: uid(), name: file.name, mimeType, size: file.size, createdAt: now() };
+  if (driveState.connected) {
+    const uploaded = await driveUploadAsset(recordId, file);
+    if (!uploaded?.id) throw new Error(`${file.name}: storage did not confirm the uploaded slide.`);
+    return normalizeHistologySlide({ ...metadata, driveFileId: uploaded.id });
+  }
+  // Some browsers leave TIFF/whole-slide MIME types empty. Keep the original
+  // bytes and use the validated extension's MIME type for the local data URL.
+  const dataUrl = (await fileToDataUrl(file)).replace(/^data:[^,]*,/, `data:${mimeType};base64,`);
+  const slide = normalizeHistologySlide({ ...metadata, dataUrl });
+  if (!slide) throw new Error(`${file.name}: the slide could not be stored.`);
+  return slide;
+}
+
+function trackSurgeryUpload(upload) {
+  const operation = Promise.resolve().then(upload);
+  surgeryUploadOperations.add(operation);
+  updateConnectionUi();
+  const finish = () => { surgeryUploadOperations.delete(operation); updateConnectionUi(); };
+  operation.then(finish, finish);
+  return operation;
+}
+
+function appendHistologySlides(record, files, onProgress = () => {}) {
+  return trackSurgeryUpload(() => appendHistologySlidesNow(record, files, onProgress));
+}
+
+async function appendHistologySlidesNow(record, files, onProgress = () => {}) {
+  requireEditorLease();
+  const selectedFiles = Array.from(files || []);
+  selectedFiles.forEach(validateHistologyFile);
+  const usingDrive = driveState.connected;
+  for (let index = 0; index < selectedFiles.length; index += 1) {
+    if (usingDrive && !driveState.connected) throw new Error("Drive disconnected. Reconnect before uploading the remaining slides.");
+    onProgress(index + 1, selectedFiles.length);
+    const slide = await storeHistologySlide(record.id, selectedFiles[index]);
+    const previousSlides = Array.isArray(record.histologySlides) ? record.histologySlides : [];
+    const previousUpdatedAt = record.updatedAt;
+    record.histologySlides = [...previousSlides, slide];
+    record.updatedAt = now();
+    try {
+      await saveExperimentRecord(record);
+    } catch (error) {
+      record.histologySlides = previousSlides;
+      record.updatedAt = previousUpdatedAt;
+      throw error;
+    }
+  }
+  return record;
+}
+
+function renderHistologySlides(slides) {
+  const normalizedSlides = (Array.isArray(slides) ? slides : []).map(normalizeHistologySlide).filter(Boolean);
+  const content = normalizedSlides.length
+    ? `<div class="histology-slides">${normalizedSlides.map((slide) => {
+        const previewable = ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(slide.mimeType);
+        const sizeLabel = slide.size === null ? "" : slide.size >= 1024 * 1024
+          ? `${(slide.size / (1024 * 1024)).toFixed(1)} MiB`
+          : `${Math.max(1, Math.ceil(slide.size / 1024))} KiB`;
+        return `<div class="histology-slide">
+          ${previewable ? renderSurgeryPhotoImage(slide, "surgery-photo-image histology-slide-preview") : `<span class="histology-slide-icon" aria-hidden="true">${ICONS.fileText}</span>`}
+          <div class="histology-slide-details">
+            <strong>${escapeHtml(slide.name)}</strong>
+            <span class="subtle">${escapeHtml([slide.mimeType === "application/octet-stream" ? "Whole-slide file" : slide.mimeType.split("/").pop().toUpperCase(), sizeLabel].filter(Boolean).join(" · "))}</span>
+          </div>
+          <button class="btn ghost" type="button" data-download-histology="${escapeHtml(slide.id)}" aria-label="Download ${escapeHtml(slide.name)}">${ICONS.download} Download</button>
+        </div>`;
+      }).join("")}</div>`
+    : `<div class="surgery-gallery-empty">${ICONS.fileText}<strong>No histology slides yet</strong><span>Upload slide images, PDFs, or whole-slide files for this sample.</span></div>`;
+  return `${content}<p class="save-state" role="status" aria-live="polite" data-histology-download-status></p>`;
+}
+
+function bindHistologyDownloads(root, record) {
+  const slides = (Array.isArray(record.histologySlides) ? record.histologySlides : []).map(normalizeHistologySlide).filter(Boolean);
+  root.querySelectorAll("[data-download-histology]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const slide = slides.find((item) => item.id === button.dataset.downloadHistology);
+      if (!slide || button.disabled) return;
+      const status = root.querySelector("[data-histology-download-status]");
+      button.disabled = true;
+      if (status) status.textContent = `Preparing ${slide.name}...`;
+      try {
+        if (!slide.dataUrl && !driveState.connected) throw new Error("Connect Drive to download this slide.");
+        const url = slide.dataUrl || await driveBlobUrl(slide.driveFileId);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = slide.name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        if (status) status.textContent = `Download started: ${slide.name}`;
+      } catch (error) {
+        if (status) status.textContent = `Download failed: ${error.message || String(error)}`;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+}
+
 async function storeSurgeryPhoto(recordId, file) {
+  if (surgeryStorageLocked()) throw new Error("Connect Drive before uploading photos.");
   if (!isImageFile(file)) throw new Error(`${file?.name || "The selected file"} is not an image.`);
 
   if (driveState.connected) {
@@ -4956,11 +5379,17 @@ async function storeSurgeryPhoto(recordId, file) {
   });
 }
 
-async function appendSurgeryPhotos(record, field, files, onProgress = () => {}) {
+function appendSurgeryPhotos(record, field, files, onProgress = () => {}) {
+  return trackSurgeryUpload(() => appendSurgeryPhotosNow(record, field, files, onProgress));
+}
+
+async function appendSurgeryPhotosNow(record, field, files, onProgress = () => {}) {
   const imageFiles = Array.from(files || []).filter(isImageFile);
   record[field] = Array.isArray(record[field]) ? record[field] : [];
+  const usingDrive = driveState.connected;
 
   for (let index = 0; index < imageFiles.length; index += 1) {
+    if (usingDrive && !driveState.connected) throw new Error("Drive disconnected. Reconnect before uploading the remaining photos.");
     onProgress(index + 1, imageFiles.length);
     const photo = await storeSurgeryPhoto(record.id, imageFiles[index]);
     if (!photo) continue;
@@ -5296,6 +5725,8 @@ async function seedIfEmpty() {
 }
 
 async function route() {
+  // Keep navigation from opening a second editable copy during an attachment save.
+  while (surgeryUploadOperations.size) await Promise.allSettled([...surgeryUploadOperations]);
   if (!await waitForLocalSaves()) {
     if (renderedHash && location.hash !== renderedHash) location.hash = renderedHash;
     updateSaveUi();
@@ -5348,7 +5779,7 @@ async function init() {
   await loadExperiments();
   window.addEventListener("hashchange", route);
   window.addEventListener("beforeunload", (event) => {
-    if (localSaveOperations.size || failedLocalWrites.size || pendingDrafts.length || antibodyEditor?.dirty) {
+    if (surgeryUploadOperations.size || localSaveOperations.size || failedLocalWrites.size || pendingDrafts.length || antibodyEditor?.dirty) {
       event.preventDefault();
       event.returnValue = "";
     }

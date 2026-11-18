@@ -43,15 +43,25 @@ Open `Surgeries` from the top navigation. The page has two views:
 
 Use `Sort by` in either view to order records by `Date performed` or `Termination date`, then use the adjacent arrow button to switch between latest and earliest dates first. In Active surgeries, termination sorting uses the calculated planned termination date and leaves unscheduled procedures at the end. In Collected samples, it uses the recorded termination date.
 
+Choose `Endpoint range` to group records into `0–7`, `8–14`, `15–28`, and `>28` days. Active surgeries use the planned endpoint; Collected samples use the actual calendar days from surgery to collection. The arrow switches between shortest and longest endpoints first. Missing or invalid durations stay at the end in both directions.
+
 For a new procedure, click `Take picture` on a phone. The app requests the rear camera so you can photograph the completed surgery card immediately. Confirm the photo, add a surgery name, review the surgery date (today is selected by default), enter the desired endpoint in days when known, and add any surgical notes. You can also choose existing photos or use `Add manually` when no card image is available.
 
-Open an active surgery to edit its name, surgery date, desired endpoint, or notes and to attach more card photos. Changing the surgery date or endpoint immediately updates the planned termination preview. Click a photo to inspect it at full size.
+Enter the animal's date of birth to see its age on the surgery date, displayed in days and weeks. Changing either date updates the age preview. The birth date must be on or before the surgery date. You can also record `Animal sex (M/F)` and `Surgeon name`; all three fields are optional, so older records can be completed later.
+
+Open a surgery to edit its name, surgery date, animal metadata, surgeon, or notes and to attach more card photos. Active surgeries also allow editing the desired endpoint. Changing the surgery date or endpoint immediately updates the planned termination preview. Click a photo to inspect it at full size.
 
 To remove a surgery created by mistake, open it and click `Delete surgery`. The procedure disappears from its normal list, but its details and photos are retained in Drive. Use `Show deleted` in the corresponding Active surgeries or Collected samples view, open the deleted surgery, and click `Restore surgery` to recover it.
 
 When an active surgery reaches two calendar days before its planned termination date, a reminder appears below the top navigation throughout both Notebook and Surgeries. The reminder also identifies procedures due today or overdue. Click a surgery name to open it, or use the close button to dismiss the currently listed surgery/date reminders on that browser. Newly due surgeries and changed planned dates can still trigger a new reminder.
 
 When the animal is euthanized and tissue is collected, open the active surgery and click `Terminate & collect`. Confirm the termination date (today is selected by default), add termination or collection notes, and attach any relevant photos. Saving moves the procedure to `Collected samples`. Collection details and additional photos can still be added later.
+
+In the collection details, record the inflammation assessment as `Successful`, `Partially successful`, or `Non successful`, and add separate inflammation notes if needed. Leave it as `Not assessed` until an assessment is available. Use `Edit collection details` to update it later.
+
+Open a collected sample to upload histology slides separately from its collection photos. Supported files are PNG, JPEG, WebP, GIF, TIFF, PDF, SVS, NDPI, and MRXS, with a limit of 25 MiB per file. Uploads preserve the original file. PNG, JPEG, WebP, and GIF display previews; use `Download` to retrieve any supported original, including TIFF, PDF, and whole-slide files. For a larger file, choose a smaller slide export.
+
+Use `Export CSV` in either surgery view to download its current records, respecting the search and `Show deleted` setting. The CSV includes birth date, numeric age at surgery in days, sex, surgeon, planned and actual durations, endpoint range, inflammation assessment and notes, and histology slide names and Drive IDs. Empty fields remain empty. Attachment bytes are not included. Search also finds surgeon names, inflammation notes, and slide filenames.
 
 In the hosted app, Drive must be connected before surgery records can be added or edited. This prevents important card photos from remaining only in temporary browser storage.
 
@@ -150,7 +160,7 @@ Sections use the same recovery principle: deleting one adds a deletion timestamp
 
 Use `Backup` to export or import a JSON snapshot of the notebook. This is useful for manual snapshots or moving local data into the hosted notebook.
 
-In Drive mode, uploaded media files, surgery cards, and collection photos stay in Drive. The backup stores references to those files.
+In Drive mode, uploaded media files, surgery cards, collection photos, and histology slides stay in Drive. The backup stores references to those files. Surgery metadata and inflammation assessments are included in the JSON backup and restored on import.
 
 ## Collaboration Tips
 
